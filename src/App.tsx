@@ -25,39 +25,24 @@ import {
   Square,
   X,
 } from "lucide-react";
-import { sampleDesktopRates, type DesktopRates } from "./desktop-rates";
+import { useCapture, errorText } from "./useCapture";
 import { useNavigation } from "./useNavigation";
 import { Select } from "./Select";
 import { Inspector } from "./Inspector";
 import { Help } from "./Help";
 import { AllTraffic } from "./AllTraffic";
-import { Chart } from "./Chart";
+import { ApplicationDetails } from "./ApplicationDetails";
+import { ConnectionTable } from "./ConnectionTable";
+import { Metric, Pagination, Empty, paginate } from "./components";
 import {
-  applications,
-  updateApplicationHistory,
-  updateCaptureHistory,
-  type CaptureHistory,
-  appendPoint,
   bytes,
+  parseView,
   connectionsForView,
   connectionsForApplication,
-  connectionLifecycle,
-  destination,
-  endpoint,
-  idle,
-  nameEvidence,
-  parseView,
-  processName,
-  received,
-  sent,
-  type Application,
   type CaptureInterface,
-  type CaptureView,
   type Sort,
-  type TrafficPoint,
 } from "./model";
 
-const PAGE_SIZE = 75;
 type Theme = "system" | "light" | "dark";
 function preference(key: string, fallback: string) {
   try {
@@ -73,8 +58,6 @@ function savePreference(key: string, value: string) {
     /* Preferences are optional in restricted webviews. */
   }
 }
-const errorText = (error: unknown) =>
-  error instanceof Error ? error.message : String(error);
 
 export default function App() {
   const { navigation, navigate } = useNavigation(
@@ -110,14 +93,15 @@ export default function App() {
     setInspectorWidth(next);
     savePreference("inspector-width", String(next));
   }
-  const [view, setView] = useState<CaptureView>(idle);
-  const rateSampler = useRef<DesktopRates | undefined>(undefined);
-  function acceptView(next: CaptureView) {
-    const sampled = sampleDesktopRates(rateSampler.current, next);
-    rateSampler.current = sampled;
-    setView(sampled.view);
-  }
-  const [display, setDisplay] = useState<CaptureView>(idle);
+  const {
+    view,
+    display,
+    paused,
+    togglePaused,
+    acceptView,
+    bridgeError,
+    lastUpdated,
+  } = useCapture();
   const [interfaces, setInterfaces] = useState<CaptureInterface[]>([]);
   const [interfaceName, setInterfaceName] = useState(() =>
     preference("interface", "__unset__"),
@@ -129,71 +113,29 @@ export default function App() {
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [bridgeError, setBridgeError] = useState<string | null>(null);
-  const [paused, setPaused] = useState(false);
   const [query, setQuery] = useState("");
   const [protocol, setProtocol] = useState("all");
   const [historic, setHistoric] = useState(false);
   const [sort, setSort] = useState<Sort>("process");
   const [appSort, setAppSort] = useState<"name" | "download">("name");
   const [appPage, setAppPage] = useState(0);
-  const [points, setPoints] = useState<TrafficPoint[]>([]);
-  const [appHistory, setAppHistory] = useState({
-    session: 0,
-    values: new Map<string, TrafficPoint[]>(),
-  });
-  const [captureHistory, setCaptureHistory] = useState<CaptureHistory>({
-    session: 0,
-    traffic: [],
-    coverage: [],
-  });
-  const frozenCaptureHistory = useRef(captureHistory);
-  useEffect(() => {
-    const raw = rateSampler.current?.raw;
-    if (view.snapshot)
-      setCaptureHistory((previous) =>
-        updateCaptureHistory(
-          previous,
-          view.session,
-          Date.parse(view.snapshot!.timestamp),
-          view.snapshot!.stats.capture_accounting,
-          {
-            smoothed: {
-              time: Date.parse(view.snapshot!.timestamp),
-              rx: view.snapshot!.connections.reduce(
-                (sum, c) => sum + received(c),
-                0,
-              ),
-              tx: view.snapshot!.connections.reduce(
-                (sum, c) => sum + sent(c),
-                0,
-              ),
-            },
-            raw,
-          },
-        ),
-      );
-  }, [view]);
-  const frozenAppHistory = useRef(new Map<string, TrafficPoint[]>());
-  const [lastUpdated, setLastUpdated] = useState(0);
   const search = useRef<HTMLInputElement>(null);
   const connectionScroll = useRef<HTMLDivElement>(null);
-  const lastClickedConnection = useRef<string | null>(null);
-  const lastRevision = useRef("");
   const active = ["starting", "running", "stopping"].includes(view.status);
-  const snapshot = display.snapshot;
+  const snapshot = display.rates.view.snapshot;
   const all = snapshot?.connections ?? [];
   const live = useMemo(() => all.filter((c) => !c.historic), [all]);
   const apps = useMemo(
     () =>
-      applications(all).sort(
+      [...display.apps].sort(
         (a, b) =>
           (appSort === "download"
             ? b.rx - a.rx
             : a.name.localeCompare(b.name)) || a.key.localeCompare(b.key),
       ),
-    [all, appSort],
+    [display.apps, appSort],
   );
+  const pagedApps = paginate(apps, appPage);
   const duplicateAppNames = useMemo(() => {
     const seen = new Set<string>();
     const duplicates = new Set<string>();
@@ -205,8 +147,8 @@ export default function App() {
   }, [apps]);
   const app = apps.find((a) => a.key === selectedApplication);
   const connection = all.find((c) => c.id === selectedConnection);
-  const rx = live.reduce((total, c) => total + received(c), 0),
-    tx = live.reduce((total, c) => total + sent(c), 0);
+  const rx = apps.reduce((total, app) => total + app.rx, 0),
+    tx = apps.reduce((total, app) => total + app.tx, 0);
   const scopedConnections = useMemo(
     () => connectionsForApplication(all, applicationFilter?.key ?? null),
     [all, applicationFilter],
@@ -255,72 +197,18 @@ export default function App() {
     void refreshInterfaces();
   }, []);
   useEffect(() => {
-    if (!isTauri()) return;
-    let cancelled = false;
-    let timer: ReturnType<typeof setTimeout>;
-    async function poll() {
-      try {
-        const next = parseView(await invoke<unknown>("capture_view"));
-        if (!cancelled) {
-          setBridgeError(null);
-          acceptView(next);
-          const key = `${next.session}:${next.revision}`;
-          if (key !== lastRevision.current) {
-            lastRevision.current = key;
-            setLastUpdated(Date.now());
-          }
-        }
-      } catch (e) {
-        if (!cancelled) setBridgeError(`Capture bridge: ${errorText(e)}`);
-      } finally {
-        if (!cancelled) timer = setTimeout(poll, 500);
-      }
-    }
-    void poll();
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, []);
-  useEffect(() => {
-    if (display.session !== view.session) {
-      setPaused(false);
-      setDisplay(view);
-      setPoints([]);
-      navigate(
-        {
-          connection: null,
-          expanded: false,
-          application: null,
-          applicationFilter: null,
-        },
-        true,
-      );
-      setAppPage(0);
-    } else if (!paused) setDisplay(view);
-  }, [view, paused, display.session, navigate]);
-  useEffect(() => {
-    if (!snapshot || (!live.length && snapshot.runtime.status === "starting"))
-      return;
-    const time = Date.parse(snapshot.timestamp);
-    setPoints((previous) => appendPoint(previous, { time, rx, tx }));
-  }, [snapshot, rx, tx, live.length]);
-  useEffect(() => {
-    if (!view.snapshot) return;
-    const sample = view.snapshot;
-    setAppHistory((previous) => ({
-      session: view.session,
-      values: updateApplicationHistory(
-        previous.session === view.session ? previous.values : new Map(),
-        sample.connections,
-        Date.parse(sample.timestamp),
-      ),
-    }));
-  }, [view.session, view.snapshot]);
-  const appPoints =
-    (paused ? frozenAppHistory.current : appHistory.values).get(
-      app?.key || "",
-    ) || [];
+    navigate(
+      {
+        connection: null,
+        expanded: false,
+        application: null,
+        applicationFilter: null,
+      },
+      true,
+    );
+    setAppPage(0);
+  }, [view.session, navigate]);
+  const appPoints = display.appHistory.get(app?.key || "") || [];
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
     savePreference("theme", theme);
@@ -469,25 +357,28 @@ export default function App() {
       setCaptureSettings(false);
     }
   }
-  async function chooseGeoipDirectory() {
+  async function runAction(action: () => Promise<void>) {
     setBusy(true);
     setError(null);
     try {
-      const directory = await invoke<string | null>("choose_geoip_directory");
-      if (directory !== null) {
-        setGeoipDirectory(directory);
-        savePreference("geoip-directory", directory);
-      }
+      await action();
     } catch (e) {
       setError(errorText(e));
     } finally {
       setBusy(false);
     }
   }
-  async function restartCapture() {
-    setBusy(true);
-    setError(null);
-    try {
+  function chooseGeoipDirectory() {
+    return runAction(async () => {
+      const directory = await invoke<string | null>("choose_geoip_directory");
+      if (directory !== null) {
+        setGeoipDirectory(directory);
+        savePreference("geoip-directory", directory);
+      }
+    });
+  }
+  function restartCapture() {
+    return runAction(async () => {
       await invoke("stop_capture");
       const stopped = parseView(await invoke("capture_view"));
       acceptView(stopped);
@@ -502,27 +393,14 @@ export default function App() {
       }
       await startCapture();
       acceptView(parseView(await invoke("capture_view")));
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setBusy(false);
-    }
+    });
   }
-  async function toggleCapture() {
-    setBusy(true);
-    setError(null);
-    try {
-      if (active) {
-        await invoke("stop_capture");
-      } else {
-        await startCapture();
-      }
+  function toggleCapture() {
+    return runAction(async () => {
+      if (active) await invoke("stop_capture");
+      else await startCapture();
       acceptView(parseView(await invoke("capture_view")));
-    } catch (e) {
-      setError(errorText(e));
-    } finally {
-      setBusy(false);
-    }
+    });
   }
   const captureError = error || bridgeError || view.error;
   const unknown = live.filter((c) => c.process?.pid == null).length;
@@ -931,13 +809,7 @@ export default function App() {
             className="button freeze"
             disabled={!snapshot}
             aria-pressed={paused}
-            onClick={() => {
-              if (!paused) {
-                frozenCaptureHistory.current = captureHistory;
-                frozenAppHistory.current = appHistory.values;
-              }
-              setPaused(!paused);
-            }}
+            onClick={togglePaused}
           >
             {paused ? <Play size={15} /> : <Pause size={15} />}
             {paused ? "Resume view" : "Freeze view"}
@@ -1022,156 +894,15 @@ export default function App() {
                 </div>
               )}
               <div className="table-scroll" ref={connectionScroll}>
-                <table
-                  onDoubleClick={(event) => {
-                    const row = (
-                      event.target as Element
-                    ).closest<HTMLTableRowElement>("tr[data-connection-id]");
-                    const connection =
-                      lastClickedConnection.current ||
-                      row?.dataset.connectionId;
-                    if (connection)
-                      navigate({ connection, expanded: true }, true);
-                  }}
-                >
-                  <thead>
-                    <tr>
-                      <th aria-sort={sort === "process" ? "ascending" : "none"}>
-                        <button
-                          className="sort-heading"
-                          aria-label="Sort by process"
-                          onClick={() => setSort("process")}
-                        >
-                          Process {sort === "process" && "↑"}
-                        </button>
-                      </th>
-                      <th
-                        aria-sort={
-                          sort === "destination" ? "ascending" : "none"
-                        }
-                      >
-                        <button
-                          className="sort-heading"
-                          aria-label="Sort by destination"
-                          onClick={() => setSort("destination")}
-                        >
-                          Destination {sort === "destination" && "↑"}
-                        </button>
-                      </th>
-                      <th>Protocol</th>
-                      <th>State</th>
-                      <th
-                        className="numeric"
-                        aria-sort={sort === "download" ? "descending" : "none"}
-                      >
-                        <button
-                          className="sort-heading"
-                          aria-label="Sort by download rate"
-                          onClick={() => setSort("download")}
-                        >
-                          Download rate {sort === "download" && "↓"}
-                        </button>
-                      </th>
-                      <th
-                        className="numeric"
-                        aria-sort={sort === "upload" ? "descending" : "none"}
-                      >
-                        <button
-                          className="sort-heading"
-                          aria-label="Sort by upload rate"
-                          onClick={() => setSort("upload")}
-                        >
-                          Upload rate {sort === "upload" && "↓"}
-                        </button>
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filtered.map((c) => {
-                      const lifecycle = connectionLifecycle(c);
-                      return (
-                        <tr
-                          key={c.id}
-                          data-connection-id={c.id}
-                          style={
-                            {
-                              "--lifecycle-fade": lifecycle?.fade ?? 0,
-                            } as CSSProperties
-                          }
-                          onClick={(event) => {
-                            if (event.detail < 2) {
-                              lastClickedConnection.current = c.id;
-                              navigate({ connection: c.id, expanded: false });
-                            } else
-                              navigate(
-                                {
-                                  connection:
-                                    lastClickedConnection.current || c.id,
-                                  expanded: true,
-                                },
-                                true,
-                              );
-                          }}
-                          className={`${selectedConnection === c.id ? "selected" : ""} ${c.historic ? "historic" : ""} ${lifecycle ? "stale-connection" : ""}`}
-                        >
-                          <td>
-                            <button
-                              className="row-select"
-                              aria-pressed={selectedConnection === c.id}
-                              aria-label={`Inspect ${processName(c)} connection to ${destination(c)}`}
-                            >
-                              {processName(c)}
-                            </button>
-                            <small>
-                              {c.process?.pid == null
-                                ? "PID unknown"
-                                : `PID ${c.process.pid}`}
-                            </small>
-                          </td>
-                          <td>
-                            <span className="hostname" title={destination(c)}>
-                              {destination(c)}
-                            </span>
-                            <small>{endpoint(c.remote)}</small>
-                          </td>
-                          <td>
-                            <span className="protocol-badge">
-                              {c.application || c.protocol}
-                            </span>
-                            <small>{c.protocol}</small>
-                          </td>
-                          <td>
-                            <span className="state-label">
-                              {c.historic ? "Closed" : c.state}
-                            </span>
-                            {c.historic && <small>Last state: {c.state}</small>}
-                            {lifecycle && (
-                              <small className="lifecycle-countdown">
-                                {lifecycle.label}
-                              </small>
-                            )}
-                          </td>
-                          <td className="numeric">
-                            {c.historic
-                              ? "Closed"
-                              : bytes(
-                                  c.traffic.incoming_bytes_per_second,
-                                  true,
-                                )}
-                          </td>
-                          <td className="numeric">
-                            {c.historic
-                              ? "Closed"
-                              : bytes(
-                                  c.traffic.outgoing_bytes_per_second,
-                                  true,
-                                )}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                <ConnectionTable
+                  filtered={filtered}
+                  sort={sort}
+                  setSort={setSort}
+                  selectedConnection={selectedConnection}
+                  onSelect={(connection, expanded) =>
+                    navigate({ connection, expanded }, expanded)
+                  }
+                />
               </div>
               {!filtered.length && (
                 <Empty
@@ -1287,84 +1018,69 @@ export default function App() {
                   <small>Capture coverage and application attribution</small>
                 </span>
               </button>
-              {apps
-                .slice(
-                  Math.min(
-                    appPage,
-                    Math.max(0, Math.ceil(apps.length / PAGE_SIZE) - 1),
-                  ) * PAGE_SIZE,
-                  (Math.min(
-                    appPage,
-                    Math.max(0, Math.ceil(apps.length / PAGE_SIZE) - 1),
-                  ) +
-                    1) *
-                    PAGE_SIZE,
-                )
-                .map((a) => (
-                  <button
-                    className="app-row"
-                    key={a.key}
-                    aria-pressed={a.key === app?.key}
-                    title="Click for traffic overview; double-click to show this application's connections"
-                    onDoubleClick={() => {
-                      setQuery("");
-                      setProtocol("all");
-                      navigate({
-                        screen: "connections",
-                        application: a.key,
-                        applicationFilter: {
-                          key: a.key,
-                          label: duplicateAppNames.has(a.name)
-                            ? `${a.name} · ${a.executable || "Executable unavailable"}`
-                            : a.name,
-                        },
-                        connection: null,
-                        expanded: false,
-                      });
-                    }}
-                    onClick={() => {
-                      navigate({
-                        application: a.key,
-                        connection: null,
-                        expanded: false,
-                      });
-                    }}
-                  >
-                    <span className="app-icon">
-                      {a.name === "Unattributed" ? (
-                        <CircleHelp size={20} />
-                      ) : (
-                        <Blocks size={20} />
-                      )}
-                    </span>
-                    <span className="app-name">
-                      <strong>{a.name}</strong>
-                      {duplicateAppNames.has(a.name) && (
-                        <small
-                          className="app-path"
-                          title={a.executable || "Executable unavailable"}
-                        >
-                          {a.executable || "Executable unavailable"}
-                        </small>
-                      )}
-                      <small>
-                        {a.connections.length} connections · {a.pids.length}{" "}
-                        PIDs · {a.hosts} {a.hosts === 1 ? "host" : "hosts"}
+              {pagedApps.items.map((a) => (
+                <button
+                  className="app-row"
+                  key={a.key}
+                  aria-pressed={a.key === app?.key}
+                  title="Click for traffic overview; double-click to show this application's connections"
+                  onDoubleClick={() => {
+                    setQuery("");
+                    setProtocol("all");
+                    navigate({
+                      screen: "connections",
+                      application: a.key,
+                      applicationFilter: {
+                        key: a.key,
+                        label: duplicateAppNames.has(a.name)
+                          ? `${a.name} · ${a.executable || "Executable unavailable"}`
+                          : a.name,
+                      },
+                      connection: null,
+                      expanded: false,
+                    });
+                  }}
+                  onClick={() => {
+                    navigate({
+                      application: a.key,
+                      connection: null,
+                      expanded: false,
+                    });
+                  }}
+                >
+                  <span className="app-icon">
+                    {a.name === "Unattributed" ? (
+                      <CircleHelp size={20} />
+                    ) : (
+                      <Blocks size={20} />
+                    )}
+                  </span>
+                  <span className="app-name">
+                    <strong>{a.name}</strong>
+                    {duplicateAppNames.has(a.name) && (
+                      <small
+                        className="app-path"
+                        title={a.executable || "Executable unavailable"}
+                      >
+                        {a.executable || "Executable unavailable"}
                       </small>
-                    </span>
-                    <span className="app-rate">{bytes(a.rx, true)}</span>
-                    <span className="share-track">
-                      <span
-                        style={{ width: `${rx ? (a.rx / rx) * 100 : 0}%` }}
-                      />
-                    </span>
-                  </button>
-                ))}
+                    )}
+                    <small>
+                      {a.connections.length} connections · {a.pids.length} PIDs
+                      · {a.hosts} {a.hosts === 1 ? "host" : "hosts"}
+                    </small>
+                  </span>
+                  <span className="app-rate">{bytes(a.rx, true)}</span>
+                  <span className="share-track">
+                    <span style={{ width: `${rx ? (a.rx / rx) * 100 : 0}%` }} />
+                  </span>
+                </button>
+              ))}
               {!apps.length && <Empty active={active} />}
-              {apps.length > PAGE_SIZE && (
+              {pagedApps.pages > 1 && (
                 <Pagination
-                  page={appPage}
-                  pages={Math.ceil(apps.length / PAGE_SIZE)}
+                  page={pagedApps.page}
+                  pages={pagedApps.pages}
                   onChange={setAppPage}
                 />
               )}
@@ -1373,14 +1089,12 @@ export default function App() {
               {selectedApplication === null ? (
                 <AllTraffic
                   snapshot={snapshot}
-                  points={points}
                   apps={apps}
-                  history={
-                    paused ? frozenCaptureHistory.current : captureHistory
-                  }
+                  history={display.history}
                 />
               ) : app ? (
-                <AppDetails
+                <ApplicationDetails
+                  key={app.key}
                   app={app}
                   points={appPoints}
                   totalRx={rx}
@@ -1397,7 +1111,7 @@ export default function App() {
                     setProtocol("all");
                   }}
                 />
-              ) : selectedApplication ? (
+              ) : (
                 <div className="empty">
                   <Activity size={28} />
                   <h2>No active connections</h2>
@@ -1411,18 +1125,6 @@ export default function App() {
                   >
                     Select an active application
                   </button>
-                </div>
-              ) : (
-                <div className="empty welcome">
-                  <img src="/rustnet.svg" alt="" />
-                  <h2>A clearer view of your network.</h2>
-                  <p>
-                    Choose an interface and start capture to see applications,
-                    live traffic, and connection details.
-                  </p>
-                  <span className="empty-hint">
-                    Packet analysis stays on this machine.
-                  </span>
                 </div>
               )}
             </div>
@@ -1442,201 +1144,5 @@ export default function App() {
         />
       )}
     </div>
-  );
-}
-
-function Metric({
-  icon,
-  label,
-  value,
-  caption,
-}: {
-  icon: React.ReactNode;
-  label: string;
-  value: string;
-  caption: string;
-}) {
-  return (
-    <div className="metric">
-      <div className="metric-label">
-        {icon}
-        {label}
-      </div>
-      <strong>{value}</strong>
-      <small>{caption}</small>
-    </div>
-  );
-}
-function Pagination({
-  page,
-  pages,
-  onChange,
-}: {
-  page: number;
-  pages: number;
-  onChange: (page: number) => void;
-}) {
-  return pages > 1 ? (
-    <div className="pagination">
-      <button disabled={page === 0} onClick={() => onChange(page - 1)}>
-        Previous
-      </button>
-      <span>
-        {page + 1} / {pages}
-      </span>
-      <button disabled={page >= pages - 1} onClick={() => onChange(page + 1)}>
-        Next
-      </button>
-    </div>
-  ) : null;
-}
-function Empty({
-  active,
-  filtered = false,
-}: {
-  active: boolean;
-  filtered?: boolean;
-}) {
-  return (
-    <div className="empty compact">
-      <Activity size={26} />
-      <h2>
-        {filtered
-          ? "No matching connections"
-          : active
-            ? "Listening for traffic"
-            : "No captured connections"}
-      </h2>
-      <p>
-        {filtered
-          ? "Try another search or protocol."
-          : active
-            ? "Connections appear when packets are observed on the selected interface."
-            : "Start a capture to populate this view."}
-      </p>
-    </div>
-  );
-}
-function AppDetails({
-  app,
-  points,
-  totalRx,
-  selected,
-  onSelect,
-  onInspect,
-}: {
-  app: Application;
-  points: TrafficPoint[];
-  totalRx: number;
-  selected: string | null;
-  onSelect: (id: string | null) => void;
-  onInspect: (id: string, expand?: boolean) => void;
-}) {
-  const [page, setPage] = useState(0);
-  useEffect(() => setPage(0), [app.key]);
-  const current = Math.min(
-    page,
-    Math.max(0, Math.ceil(app.connections.length / PAGE_SIZE) - 1),
-  );
-  return (
-    <>
-      <div className="app-title">
-        <span className="app-icon large">
-          <Blocks size={23} />
-        </span>
-        <div>
-          <h2>{app.name}</h2>
-          <p className="subtitle">
-            {app.pids.length
-              ? `PIDs ${app.pids.slice(0, 8).join(", ")}${app.pids.length > 8 ? "…" : ""}`
-              : "Process owner unavailable"}
-          </p>
-        </div>
-      </div>
-      {app.executable && <p className="executable">{app.executable}</p>}
-      <p className="app-counts">
-        {app.connections.length} active connections · {app.pids.length} PIDs ·{" "}
-        <span title="Unique remote IP addresses across active connections">
-          {app.hosts} {app.hosts === 1 ? "host" : "hosts"}
-        </span>
-      </p>
-      <div className="app-metrics">
-        <Metric
-          icon={<ArrowDownLeft />}
-          label="Download"
-          value={bytes(app.rx, true)}
-          caption="2-second average"
-        />
-        <Metric
-          icon={<ArrowUpRight />}
-          label="Upload"
-          value={bytes(app.tx, true)}
-          caption="2-second average"
-        />
-        <Metric
-          icon={<ArrowDownLeft />}
-          label="Total downloaded"
-          value={bytes(app.downloaded)}
-          caption="Retained connections"
-        />
-        <Metric
-          icon={<ArrowUpRight />}
-          label="Total uploaded"
-          value={bytes(app.uploaded)}
-          caption="Retained connections"
-        />
-      </div>
-      <Chart points={points} label="Traffic · last 60 seconds" />
-      <div className="endpoints-title">
-        <h3>Talking to</h3>
-        <span>{app.connections.length} connections</span>
-      </div>
-      {app.connections
-        .slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE)
-        .map((c) => (
-          <div
-            className="endpoint"
-            key={c.id}
-            onDoubleClick={() => onInspect(c.id, true)}
-          >
-            <button
-              className="endpoint-summary"
-              aria-expanded={selected === c.id}
-              onClick={() => onSelect(selected === c.id ? null : c.id)}
-            >
-              <span>
-                <strong>{destination(c)}</strong>
-                <small>
-                  {c.application || c.protocol} · {nameEvidence(c)}
-                </small>
-              </span>
-              <span>{bytes(received(c), true)}</span>
-            </button>
-            {selected === c.id && (
-              <div className="endpoint-expanded">
-                <span>
-                  {endpoint(c.remote)} · {c.state} · PID{" "}
-                  {c.process?.pid ?? "unknown"}
-                </span>
-                <button className="button" onClick={() => onInspect(c.id)}>
-                  Inspect connection
-                </button>
-              </div>
-            )}
-          </div>
-        ))}
-      <div className="list-footer">
-        <span>
-          {totalRx
-            ? `${((app.rx / totalRx) * 100).toFixed(1)}% of current download traffic`
-            : "No current download traffic"}
-        </span>
-        <Pagination
-          page={current}
-          pages={Math.ceil(app.connections.length / PAGE_SIZE)}
-          onChange={setPage}
-        />
-      </div>
-    </>
   );
 }

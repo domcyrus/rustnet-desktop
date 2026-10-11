@@ -557,10 +557,7 @@ export function applications(connections: Connection[]): Application[] {
         a.id.localeCompare(b.id),
     );
   }
-  return [...grouped.values()].sort(
-    (a, b) =>
-      b.rx - a.rx || a.name.localeCompare(b.name) || a.key.localeCompare(b.key),
-  );
+  return [...grouped.values()];
 }
 export function connectionsForView(
   connections: Connection[],
@@ -635,7 +632,7 @@ export function appendPoint(
 /** Retain observed samples for every application, independent of selection. */
 export function updateApplicationHistory(
   previous: Map<string, TrafficPoint[]>,
-  connections: Connection[],
+  apps: Application[],
   time: number,
 ): Map<string, TrafficPoint[]> {
   const result = new Map<string, TrafficPoint[]>();
@@ -643,7 +640,7 @@ export function updateApplicationHistory(
     const recent = history.filter((point) => point.time >= time - 60000);
     if (recent.length) result.set(key, recent);
   }
-  for (const app of applications(connections)) {
+  for (const app of apps) {
     result.set(
       app.key,
       appendPoint(result.get(app.key) || [], { time, rx: app.rx, tx: app.tx }),
@@ -688,14 +685,20 @@ export function updateCaptureHistory(
   previous: CaptureHistory,
   session: number,
   time: number,
-  totals?: CaptureAccounting,
-  desktopRates?: { smoothed: TrafficPoint; raw?: TrafficPoint },
+  totals: CaptureAccounting | undefined,
+  desktopRates: { smoothed: TrafficPoint; raw?: TrafficPoint },
 ): CaptureHistory {
   const state: CaptureHistory =
     previous.session === session
       ? previous
       : { session, traffic: [], coverage: [] };
-  if (!totals) return { session, traffic: [], coverage: [] };
+  const traffic = {
+    traffic: appendPoint(state.traffic, desktopRates.smoothed),
+    rawTraffic: desktopRates.raw
+      ? appendPoint(state.rawTraffic ?? [], desktopRates.raw)
+      : state.rawTraffic,
+  };
+  if (!totals) return { session, ...traffic, coverage: [] };
   const current = { time, totals };
   const last = state.previous;
   if (last && time <= last.time) return state;
@@ -704,8 +707,7 @@ export function updateCaptureHistory(
       session,
       previous: current,
       samples: [current],
-      traffic: desktopRates ? [desktopRates.smoothed] : [],
-      rawTraffic: desktopRates?.raw ? [desktopRates.raw] : [],
+      ...traffic,
       coverage: [],
     };
   }
@@ -723,41 +725,25 @@ export function updateCaptureHistory(
       baseline.totals[key] +=
         (newer.totals[key] - baseline.totals[key]) * fraction;
   }
-  const rates = (start: CaptureSample) => {
+  const rates = (start: CaptureSample): TrafficPoint => {
     const seconds = (time - start.time) / 1000;
     return {
-      traffic: {
-        time,
-        rx: (totals.tracked_received - start.totals.tracked_received) / seconds,
-        tx: (totals.tracked_sent - start.totals.tracked_sent) / seconds,
-      },
-      coverage: {
-        time,
-        rx: (totals.captured - start.totals.captured) / seconds,
-        tx:
-          (totals.attributed_received +
-            totals.attributed_sent -
-            start.totals.attributed_received -
-            start.totals.attributed_sent) /
-          seconds,
-      },
+      time,
+      rx: (totals.captured - start.totals.captured) / seconds,
+      tx:
+        (totals.attributed_received +
+          totals.attributed_sent -
+          start.totals.attributed_received -
+          start.totals.attributed_sent) /
+        seconds,
     };
   };
-  const smoothed = rates(baseline),
-    raw = rates(last);
   return {
     session,
     previous: current,
     samples,
-    traffic: appendPoint(
-      state.traffic,
-      desktopRates?.smoothed ?? smoothed.traffic,
-    ),
-    coverage: appendPoint(state.coverage, smoothed.coverage),
-    rawTraffic: appendPoint(
-      state.rawTraffic ?? [],
-      desktopRates?.raw ?? raw.traffic,
-    ),
-    rawCoverage: appendPoint(state.rawCoverage ?? [], raw.coverage),
+    ...traffic,
+    coverage: appendPoint(state.coverage, rates(baseline)),
+    rawCoverage: appendPoint(state.rawCoverage ?? [], rates(last)),
   };
 }
