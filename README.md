@@ -247,3 +247,15 @@ The current Tauri Linux dependency tree reports upstream RustSec warnings for
 unmaintained crates and GLib `VariantStrIter` soundness (RUSTSEC-2024-0429).
 These warnings are not suppressed in the desktop checks. Review upstream fixes
 before distributing a production release.
+
+## Dependency updates
+
+GitHub Dependabot checks pnpm dependencies at the repository root, Cargo dependencies
+in `src-tauri`, and GitHub Actions daily. Its configuration follows RustNet: updates
+are grouped by ecosystem, including major upgrades. Package updates have a 3-day
+default cooldown (7 days for major, 4 for minor, 3 for patch releases). Security
+updates are not delayed by cooldowns. Review the PR and CI results before merging;
+no automatic merging or external app installation is configured.
+
+`engine.lock.json` and the temporary engine patches remain manually maintained
+together. Dependabot does not update the patched engine revision.
