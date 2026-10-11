@@ -1,0 +1,11 @@
+{
+  "repository": "https://github.com/domcyrus/rustnet.git",
+  "revision": "36601b99de4d675bb3e2eefc8d1df86ede41baf6",
+  "schemaVersion": 1,
+  "patches": [
+    {
+      "file": "engine/patches/0001-desktop-integration.patch",
+      "sha256": "86220cced281ddbb5e1e2102c26385ff1060645c26d198de44ae921ac3e61b30"
+    }
+  ]
+}

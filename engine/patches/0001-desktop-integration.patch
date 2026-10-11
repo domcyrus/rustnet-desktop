@@ -1,0 +1,2586 @@
+diff --git a/crates/rustnet-host/src/linux/process.rs b/crates/rustnet-host/src/linux/process.rs
+index 11aeb8a..12ea691 100644
+--- a/crates/rustnet-host/src/linux/process.rs
++++ b/crates/rustnet-host/src/linux/process.rs
+@@ -271,6 +271,8 @@ struct SnapshotOwner {
+     pid: u32,
+     name: String,
+     inode: u64,
++    /// Path observed before the sandbox can restrict procfs access.
++    executable: Option<PathBuf>,
+     /// Process start time in clock ticks, when it was readable at startup.
+     /// `comm` alone cannot survive PID reuse because any process may rename
+     /// itself with `prctl(PR_SET_NAME)`; the start time cannot be forged.
+@@ -328,6 +330,7 @@ fn build_startup_snapshot(
+                 name: owner.name.clone(),
+                 inode,
+                 start_ticks: process_start_ticks(owner.pid),
++                executable: resolve_executable(owner.pid),
+             },
+         );
+     }
+@@ -570,8 +573,8 @@ impl LinuxProcessLookup {
+         tgid: u32,
+         name: String,
+         quality: MatchQuality,
++        executable: Option<PathBuf>,
+     ) -> ProcessAttribution {
+-        let executable = resolve_executable(tgid);
+         let name = refine_truncated_name(name, executable.as_deref());
+         let mut attribution =
+             ProcessAttribution::new(tgid, name, quality).with_executable(executable);
+@@ -587,6 +590,33 @@ impl LinuxProcessLookup {
+         }
+     }
+ 
++    fn executable_for(
++        &self,
++        conn: &Connection,
++        tgid: u32,
++        quality: MatchQuality,
++        live: Option<PathBuf>,
++    ) -> Option<PathBuf> {
++        live.or_else(|| {
++            if quality != MatchQuality::StartupSnapshot {
++                return None;
++            }
++            let key = ConnectionKey::from_connection(conn);
++            let owner = self.startup_snapshot.get(&key)?;
++            // Cached paths require verifiable process identity, even when the
++            // less detailed startup attribution had no readable start time.
++            if owner.pid == tgid
++                && owner.start_ticks.is_some()
++                && snapshot_owner_still_matches(owner)
++                && self.snapshot_socket_unchanged(&key, owner.inode)
++            {
++                owner.executable.clone()
++            } else {
++                None
++            }
++        })
++    }
++
+     /// Build the connection map and socket inventory.
+     fn build_process_map(
+         startup_owners: StartupSocketOwners,
+@@ -745,7 +775,8 @@ impl LinuxProcessLookup {
+ impl ProcessLookup for LinuxProcessLookup {
+     fn get_process_attribution(&self, conn: &Connection) -> Option<ProcessAttribution> {
+         let (tgid, name, quality) = self.lookup_match(conn)?;
+-        Some(self.build_attribution(tgid, name, quality))
++        let executable = self.executable_for(conn, tgid, quality, resolve_executable(tgid));
++        Some(self.build_attribution(tgid, name, quality, executable))
+     }
+ 
+     fn refresh(&self) -> Result<()> {
+@@ -924,6 +955,7 @@ mod tests {
+                 name,
+                 inode,
+                 start_ticks: process_start_ticks(pid),
++                executable: resolve_executable(pid),
+             },
+         );
+         LinuxProcessLookup {
+@@ -1103,6 +1135,79 @@ mod tests {
+         assert_eq!(quality, MatchQuality::StartupSnapshot);
+     }
+ 
++    #[test]
++    fn startup_executable_survives_later_procfs_denial_with_identity_guards() {
++        let local = "192.168.1.10:44444";
++        let remote = "203.0.113.5:22";
++        let sockets = SocketSnapshot::new(vec![owned_socket(
++            local,
++            remote,
++            777,
++            own_pid(),
++            &own_comm(),
++        )]);
++        let mut lookup = snapshot_lookup(
++            (local, remote, own_pid(), own_comm(), 777),
++            vec![host_socket(local, remote, 777)],
++        );
++        lookup.startup_snapshot = build_startup_snapshot(&sockets, &HashSet::new());
++        let conn = tcp_connection(local, remote);
++        let expected = std::env::current_exe().unwrap();
++        let quality = MatchQuality::StartupSnapshot;
++        // None represents a post-sandbox read_link permission failure.
++        let executable = lookup.executable_for(&conn, own_pid(), quality, None);
++        assert_eq!(executable, Some(expected.clone()));
++        assert_eq!(
++            lookup
++                .build_attribution(own_pid(), own_comm(), quality, executable)
++                .executable,
++            Some(expected)
++        );
++        assert!(
++            lookup
++                .executable_for(&conn, own_pid(), MatchQuality::ProcfsExact, None)
++                .is_none()
++        );
++        let live = PathBuf::from("/new/executable");
++        assert_eq!(
++            lookup.executable_for(&conn, own_pid(), quality, Some(live.clone())),
++            Some(live)
++        );
++
++        let owner = lookup
++            .startup_snapshot
++            .get_mut(&key(local, remote))
++            .unwrap();
++        owner.start_ticks = owner.start_ticks.map(|ticks| ticks + 1);
++        assert!(
++            lookup
++                .executable_for(&conn, own_pid(), quality, None)
++                .is_none()
++        );
++        lookup
++            .startup_snapshot
++            .get_mut(&key(local, remote))
++            .unwrap()
++            .start_ticks = None;
++        assert!(
++            lookup
++                .executable_for(&conn, own_pid(), quality, None)
++                .is_none()
++        );
++        lookup
++            .startup_snapshot
++            .get_mut(&key(local, remote))
++            .unwrap()
++            .start_ticks = process_start_ticks(own_pid());
++        *lookup.socket_snapshot.write().unwrap() =
++            SocketSnapshot::new(vec![host_socket(local, remote, 888)]);
++        assert!(
++            lookup
++                .executable_for(&conn, own_pid(), quality, None)
++                .is_none()
++        );
++    }
++
+     #[test]
+     fn startup_snapshot_rejects_a_reused_tuple() {
+         // The startup socket closed and another (owner-invisible) socket
+@@ -1173,6 +1278,7 @@ mod tests {
+                 name: own_comm(),
+                 inode: 777,
+                 start_ticks: process_start_ticks(own_pid()).map(|ticks| ticks + 1),
++                executable: None,
+             },
+         );
+         let lookup = LinuxProcessLookup {
+@@ -1217,6 +1323,7 @@ mod tests {
+                 name: "old-owner".to_string(),
+                 inode: 777,
+                 start_ticks: None,
++                executable: None,
+             },
+         );
+         let mut live = ConnectionProcessMap::new();
+diff --git a/src/accounts.rs b/src/accounts.rs
+new file mode 100644
+index 0000000..1d93f87
+--- /dev/null
++++ b/src/accounts.rs
+@@ -0,0 +1,233 @@
++//! Cached account labels shared by terminal and headless output.
++#[cfg(unix)]
++use std::{
++    collections::HashMap,
++    mem::MaybeUninit,
++    ptr,
++    sync::{Mutex, OnceLock},
++};
++
++#[cfg(unix)]
++static USER_NAMES: OnceLock<Mutex<HashMap<u32, Option<String>>>> = OnceLock::new();
++#[cfg(unix)]
++static GROUP_NAMES: OnceLock<Mutex<HashMap<u32, Option<String>>>> = OnceLock::new();
++
++#[cfg(unix)]
++fn account_name_from_buffer(name: *const libc::c_char, buffer: &[libc::c_char]) -> Option<String> {
++    if name.is_null() {
++        return None;
++    }
++
++    let buffer_start = buffer.as_ptr() as usize;
++    let buffer_end = buffer_start.checked_add(buffer.len())?;
++    let name_address = name as usize;
++    if !(buffer_start..buffer_end).contains(&name_address) {
++        return None;
++    }
++
++    let name_start = name_address - buffer_start;
++    let name_len = buffer[name_start..].iter().position(|byte| *byte == 0)?;
++    let name_bytes: Vec<u8> = buffer[name_start..name_start + name_len]
++        .iter()
++        .map(|byte| byte.to_ne_bytes()[0])
++        .collect();
++    Some(String::from_utf8_lossy(&name_bytes).into_owned())
++}
++
++/// Resolve an account id to its name through a `getpwuid_r`-shaped libc call.
++///
++/// `name_of` projects the name pointer out of a resolved entry; the name
++/// itself is read from `buffer` only after bounds validation.
++#[cfg(unix)]
++fn resolve_account_name<T>(
++    id: u32,
++    getter: unsafe extern "C" fn(
++        u32,
++        *mut T,
++        *mut libc::c_char,
++        libc::size_t,
++        *mut *mut T,
++    ) -> libc::c_int,
++    name_of: fn(&T) -> *const libc::c_char,
++) -> Option<String> {
++    let mut buffer: Vec<libc::c_char> = vec![0; 1024];
++    loop {
++        let mut entry = MaybeUninit::<T>::uninit();
++        let entry_ptr = entry.as_mut_ptr();
++        let mut result = ptr::null_mut();
++        // SAFETY: `entry` and `buffer` are writable for the sizes supplied,
++        // and `result` is an out-pointer inspected only after a successful call.
++        let status = unsafe {
++            getter(
++                id,
++                entry_ptr,
++                buffer.as_mut_ptr(),
++                buffer.len(),
++                &mut result,
++            )
++        };
++        if status == 0 {
++            if result != entry_ptr {
++                return None;
++            }
++            // SAFETY: a successful lookup that returns `entry_ptr` initialized
++            // the caller-owned entry.
++            let entry = unsafe { entry.assume_init() };
++            return account_name_from_buffer(name_of(&entry), &buffer);
++        }
++        if status != libc::ERANGE || buffer.len() >= 1024 * 1024 {
++            return None;
++        }
++        buffer.resize(buffer.len() * 2, 0);
++    }
++}
++
++#[cfg(unix)]
++fn resolve_user_name(uid: u32) -> Option<String> {
++    resolve_account_name(uid, libc::getpwuid_r, |entry: &libc::passwd| {
++        entry.pw_name.cast_const()
++    })
++}
++
++#[cfg(unix)]
++fn resolve_group_name(gid: u32) -> Option<String> {
++    resolve_account_name(gid, libc::getgrgid_r, |entry: &libc::group| {
++        entry.gr_name.cast_const()
++    })
++}
++
++/// Names are resolved once per id and cached for the process lifetime,
++/// including failures. The first lookup can stall a frame on hosts backed by
++/// directory services, and a later account rename stays stale; both are
++/// acceptable for a capture session.
++#[cfg(unix)]
++fn cached_account_name(
++    cache: &'static OnceLock<Mutex<HashMap<u32, Option<String>>>>,
++    id: u32,
++    resolve: fn(u32) -> Option<String>,
++) -> Option<String> {
++    let cache = cache.get_or_init(|| Mutex::new(HashMap::new()));
++    if let Some(name) = cache.lock().expect("account name cache poisoned").get(&id) {
++        return name.clone();
++    }
++
++    let name = resolve(id);
++    cache
++        .lock()
++        .expect("account name cache poisoned")
++        .insert(id, name.clone());
++    name
++}
++
++fn user_group_label(
++    uid: u32,
++    gid: Option<u32>,
++    user_name: Option<String>,
++    group_name: Option<String>,
++) -> String {
++    let user = user_name.unwrap_or_else(|| uid.to_string());
++    let Some(gid) = gid else {
++        return user;
++    };
++    let group = group_name.unwrap_or_else(|| gid.to_string());
++    format!("{user}:{group}")
++}
++
++pub(crate) fn format_user_group(uid: u32, gid: Option<u32>) -> String {
++    #[cfg(unix)]
++    let user_name = cached_account_name(&USER_NAMES, uid, resolve_user_name);
++    #[cfg(not(unix))]
++    let user_name = None;
++
++    #[cfg(unix)]
++    let group_name = gid.and_then(|gid| cached_account_name(&GROUP_NAMES, gid, resolve_group_name));
++    #[cfg(not(unix))]
++    let group_name = None;
++
++    user_group_label(uid, gid, user_name, group_name)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::{format_user_group, user_group_label};
++    #[test]
++    fn unknown_account_ids_fall_back_to_numbers() {
++        assert_eq!(
++            user_group_label(u32::MAX, Some(u32::MAX), None, None),
++            "4294967295:4294967295"
++        );
++    }
++
++    #[cfg(unix)]
++    #[test]
++    fn current_account_ids_resolve_to_names() {
++        // SAFETY: these calls only read this process's effective credentials.
++        let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
++        let user = super::resolve_user_name(uid).expect("current user must resolve");
++        let group = super::resolve_group_name(gid).expect("current group must resolve");
++
++        assert_eq!(format_user_group(uid, Some(gid)), format!("{user}:{group}"));
++    }
++
++    #[cfg(all(target_os = "linux", feature = "landlock"))]
++    #[test]
++    fn current_account_ids_resolve_with_landlock_enforced() {
++        use rustnet_sandbox::{SandboxConfig, SandboxMode, apply_sandbox};
++
++        let result = apply_sandbox(&SandboxConfig {
++            mode: SandboxMode::BestEffort,
++            block_network: false,
++            read_paths: vec![],
++            drop_uid: None,
++        })
++        .expect("best-effort sandbox must apply without error");
++        if !result.fs_restricted {
++            return;
++        }
++
++        // SAFETY: these calls only read this process's effective credentials.
++        let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
++        assert!(
++            super::resolve_user_name(uid).is_some(),
++            "current user must resolve inside the sandbox"
++        );
++        assert!(
++            super::resolve_group_name(gid).is_some(),
++            "current group must resolve inside the sandbox"
++        );
++    }
++
++    #[cfg(unix)]
++    #[test]
++    fn account_name_must_be_terminated_inside_the_supplied_buffer() {
++        let buffer = [
++            b'x' as libc::c_char,
++            b'm' as libc::c_char,
++            b'a' as libc::c_char,
++            b'r' as libc::c_char,
++            b'c' as libc::c_char,
++            b'o' as libc::c_char,
++            0,
++        ];
++        assert_eq!(
++            super::account_name_from_buffer(buffer[1..].as_ptr(), &buffer).as_deref(),
++            Some("marco")
++        );
++
++        let external = [b'x' as libc::c_char, 0];
++        assert_eq!(
++            super::account_name_from_buffer(external.as_ptr(), &buffer),
++            None
++        );
++        assert_eq!(
++            super::account_name_from_buffer(std::ptr::null(), &buffer),
++            None
++        );
++
++        let unterminated = [b'n' as libc::c_char, b'o' as libc::c_char];
++        assert_eq!(
++            super::account_name_from_buffer(unterminated.as_ptr(), &unterminated),
++            None
++        );
++    }
++}
+diff --git a/src/app/capture.rs b/src/app/capture.rs
+index 6d93abb..6876734 100644
+--- a/src/app/capture.rs
++++ b/src/app/capture.rs
+@@ -432,6 +432,7 @@ fn route_captured_packet(
+     pcapng_tx: Option<&Sender<PcapngRecord>>,
+     stats: &AppStats,
+ ) -> Option<CapturedPacket> {
++    stats.record_captured_bytes(u64::from(packet.original_len));
+     stats.packets_captured.fetch_add(1, Ordering::Relaxed);
+     stats
+         .bytes_captured
+@@ -989,6 +990,15 @@ impl App {
+                                 if outcome.dropped || outcome.ignored_late {
+                                     None
+                                 } else {
++                                    let attributed = tracker
++                                        .connections()
++                                        .get(&outcome.key)
++                                        .is_some_and(|conn| conn.pid.is_some());
++                                    stats.record_tracked_bytes(
++                                        u64::from(packet.original_len),
++                                        parsed.is_outgoing,
++                                        attributed,
++                                    );
+                                     Some(outcome.key)
+                                 }
+                             });
+diff --git a/src/app/mod.rs b/src/app/mod.rs
+index 381cee2..9d5b9d0 100644
+--- a/src/app/mod.rs
++++ b/src/app/mod.rs
+@@ -31,7 +31,7 @@ pub use output::{
+ pub use runtime::{InitStatus, StopReport, WorkerStartupPermit};
+ pub use state::App;
+ pub(crate) use types::ConnectionCounts;
+-pub use types::{AppOutputHandles, AppStats, Config};
++pub use types::{AppOutputHandles, AppStats, CaptureAccounting, Config};
+ 
+ use std::time::Duration;
+ 
+diff --git a/src/app/sampling.rs b/src/app/sampling.rs
+index 3625366..57a596d 100644
+--- a/src/app/sampling.rs
++++ b/src/app/sampling.rs
+@@ -154,14 +154,27 @@ pub(super) fn build_connection_snapshot(
+         passes_localhost_filter(connection, filter_localhost)
+     };
+ 
+-    let mut snapshot = snapshot_source(tracker.connections(), enrich_and_filter);
+-    if include_historic {
+-        snapshot.extend(snapshot_source(tracker.historic(), enrich_and_filter));
+-    }
++    let mut snapshot = snapshot_retained_connections(tracker, include_historic, enrich_and_filter);
+     snapshot.sort_by_key(|connection| connection.created_at);
+     snapshot
+ }
+ 
++fn snapshot_retained_connections(
++    tracker: &ConnectionTracker,
++    include_historic: bool,
++    enrich_and_filter: impl Fn(&mut Connection) -> bool,
++) -> Vec<Connection> {
++    // Keep lifecycle transitions out of the two-table scan. Otherwise a flow
++    // archived after the active scan can appear again in the historic scan.
++    tracker.with_retained_sources(|active, historic| {
++        let mut snapshot = snapshot_source(active, &enrich_and_filter);
++        if include_historic {
++            snapshot.extend(snapshot_source(historic, &enrich_and_filter));
++        }
++        snapshot
++    })
++}
++
+ impl App {
+     pub(super) fn start_snapshot_provider(
+         &mut self,
+@@ -549,6 +562,54 @@ mod live_rate_sampling_tests {
+         ApplicationProtocol, ConnectionKey, DnsInfo, DnsQueryType, DpiInfo, Protocol, ProtocolState,
+     };
+ 
++    #[test]
++    fn connection_snapshot_blocks_archival_until_both_tables_are_scanned() {
++        let tracker = Arc::new(ConnectionTracker::new());
++        let packet = crate::network::parser::ParsedPacket::new(
++            Protocol::Udp,
++            "192.0.2.1:40000".parse().unwrap(),
++            "198.51.100.1:53".parse().unwrap(),
++            ProtocolState::Udp,
++            true,
++            100,
++            None,
++            None,
++        );
++        tracker.ingest_at(&packet, SystemTime::now());
++        let (scanned_tx, scanned_rx) = std::sync::mpsc::channel();
++        let (release_tx, release_rx) = std::sync::mpsc::channel();
++        let reader_tracker = Arc::clone(&tracker);
++        let reader = std::thread::spawn(move || {
++            snapshot_retained_connections(&reader_tracker, true, |conn| {
++                if !conn.is_historic {
++                    scanned_tx.send(()).unwrap();
++                    release_rx.recv().unwrap();
++                }
++                true
++            })
++        });
++        scanned_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        let (started_tx, started_rx) = std::sync::mpsc::channel();
++        let (done_tx, done_rx) = std::sync::mpsc::channel();
++        let cleaner_tracker = Arc::clone(&tracker);
++        let cleaner = std::thread::spawn(move || {
++            started_tx.send(()).unwrap();
++            cleaner_tracker.cleanup(SystemTime::now() + Duration::from_secs(86400));
++            done_tx.send(()).unwrap();
++        });
++        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
++        assert!(done_rx.recv_timeout(Duration::from_millis(50)).is_err());
++        release_tx.send(()).unwrap();
++        let snapshot = reader.join().unwrap();
++        assert_eq!(snapshot.len(), 1);
++        assert!(!snapshot[0].is_historic);
++        cleaner.join().unwrap();
++        let snapshot = snapshot_retained_connections(&tracker, true, |_| true);
++        assert_eq!(snapshot.len(), 1);
++        assert!(snapshot[0].is_historic);
++        assert!(snapshot_retained_connections(&tracker, false, |_| true).is_empty());
++    }
++
+     #[test]
+     fn activity_and_overview_share_ptr_visibility_for_active_and_historic_dns() {
+         for resolve_dns in [false, true] {
+diff --git a/src/app/state.rs b/src/app/state.rs
+index f4b82ba..cc59d18 100644
+--- a/src/app/state.rs
++++ b/src/app/state.rs
+@@ -811,6 +811,12 @@ impl App {
+         self.tracker.ingest_at(parsed, at);
+     }
+ 
++    /// Advance the production cleanup path without waiting for expiry.
++    #[cfg(test)]
++    pub(crate) fn cleanup_connections_for_test(&self, at: SystemTime) {
++        self.tracker.cleanup(at);
++    }
++
+     /// Override the current interface label. Tests only.
+     #[cfg(test)]
+     pub(crate) fn set_current_interface_for_test(&self, iface: Option<String>) {
+diff --git a/src/app/types.rs b/src/app/types.rs
+index 398604c..a49ad6a 100644
+--- a/src/app/types.rs
++++ b/src/app/types.rs
+@@ -4,8 +4,8 @@
+ 
+ use std::collections::{HashSet, VecDeque};
+ use std::fs::File;
+-use std::sync::RwLock;
+ use std::sync::atomic::{AtomicU64, Ordering};
++use std::sync::{Mutex, RwLock};
+ use std::time::{Instant, SystemTime};
+ 
+ use crate::network::types::{Connection, GraphScale, GraphScroll, Protocol};
+@@ -164,9 +164,21 @@ impl ConnectionCounts {
+     }
+ }
+ 
++/// Lifetime capture coverage, all measured in original captured frame bytes.
++/// Attribution records ownership at packet processing time, without later revision.
++#[derive(Debug, Clone, Copy, Default, serde::Serialize)]
++pub struct CaptureAccounting {
++    pub captured: u64,
++    pub tracked_received: u64,
++    pub tracked_sent: u64,
++    pub attributed_received: u64,
++    pub attributed_sent: u64,
++}
++
+ /// Application statistics
+ #[derive(Debug)]
+ pub struct AppStats {
++    capture_accounting: Mutex<CaptureAccounting>,
+     /// Packets delivered by the capture backend since startup, before queue
+     /// drops, attribution gating, parsing, or connection tracking.
+     pub packets_captured: AtomicU64,
+@@ -207,6 +219,7 @@ pub struct AppStats {
+ impl Default for AppStats {
+     fn default() -> Self {
+         Self {
++            capture_accounting: Mutex::default(),
+             packets_captured: AtomicU64::new(0),
+             bytes_captured: AtomicU64::new(0),
+             packets_processed: AtomicU64::new(0),
+@@ -235,6 +248,38 @@ impl Default for AppStats {
+ }
+ 
+ impl AppStats {
++    pub fn capture_accounting(&self) -> CaptureAccounting {
++        *self
++            .capture_accounting
++            .lock()
++            .unwrap_or_else(|e| e.into_inner())
++    }
++
++    pub(super) fn record_captured_bytes(&self, bytes: u64) {
++        self.capture_accounting
++            .lock()
++            .unwrap_or_else(|e| e.into_inner())
++            .captured += bytes;
++    }
++
++    pub(super) fn record_tracked_bytes(&self, bytes: u64, outgoing: bool, attributed: bool) {
++        let mut totals = self
++            .capture_accounting
++            .lock()
++            .unwrap_or_else(|e| e.into_inner());
++        if outgoing {
++            totals.tracked_sent += bytes;
++            if attributed {
++                totals.attributed_sent += bytes;
++            }
++        } else {
++            totals.tracked_received += bytes;
++            if attributed {
++                totals.attributed_received += bytes;
++            }
++        }
++    }
++
+     /// Session counters cleared by the UI, in declaration order. Lifetime
+     /// capture totals and output failures are deliberately excluded.
+     fn counters(&self) -> [&AtomicU64; 19] {
+@@ -271,6 +316,7 @@ impl AppStats {
+     /// Copy of the current counter values and last-update timestamp.
+     pub(crate) fn snapshot(&self) -> AppStats {
+         let snapshot = AppStats {
++            capture_accounting: Mutex::new(self.capture_accounting()),
+             packets_captured: AtomicU64::new(self.packets_captured.load(Ordering::Relaxed)),
+             bytes_captured: AtomicU64::new(self.bytes_captured.load(Ordering::Relaxed)),
+             last_update: RwLock::new(*self.last_update.read().unwrap()),
+@@ -407,6 +453,23 @@ mod conn_rate_history_tests {
+ mod app_stats_tests {
+     use super::*;
+ 
++    #[test]
++    fn capture_coverage_uses_frame_bytes_and_survives_connection_counter_resets() {
++        let stats = AppStats::default();
++        stats.record_captured_bytes(1000);
++        stats.record_tracked_bytes(200, false, true);
++        stats.record_tracked_bytes(300, true, false);
++        stats.record_tracked_bytes(100, true, true);
++        let copy = stats.snapshot();
++        stats.reset_counters();
++        stats.record_captured_bytes(50);
++        let totals = stats.capture_accounting();
++        assert_eq!(totals.captured, 1050);
++        assert_eq!(totals.tracked_received + totals.tracked_sent, 600);
++        assert_eq!(totals.attributed_received + totals.attributed_sent, 300);
++        assert_eq!(copy.capture_accounting().captured, 1000);
++    }
++
+     #[test]
+     fn snapshots_all_counters_and_resets_only_session_counters() {
+         let stats = AppStats::default();
+diff --git a/src/bootstrap.rs b/src/bootstrap.rs
+index f936957..fb89774 100644
+--- a/src/bootstrap.rs
++++ b/src/bootstrap.rs
+@@ -16,6 +16,20 @@ use std::time::Duration;
+ /// Parse CLI options and initialize the selected frontend.
+ pub fn run() -> Result<()> {
+     let matches = cli::build_cli().get_matches();
++    if matches.get_flag("list-interfaces") {
++        #[cfg(target_os = "windows")]
++        initialize_windows_npcap()?;
++        let interfaces: Vec<_> = pcap::Device::list()?
++            .into_iter()
++            .map(|device| serde_json::json!({
++                "name": device.name,
++                "description": device.desc,
++                "addresses": device.addresses.iter().map(|address| address.addr.to_string()).collect::<Vec<_>>()
++            }))
++            .collect();
++        serde_json::to_writer(io::stdout().lock(), &interfaces)?;
++        return Ok(());
++    }
+     let headless = matches.get_flag("headless");
+ 
+     // Never start terminal control or privileged capture accidentally from a
+@@ -371,6 +385,17 @@ pub fn run() -> Result<()> {
+     // a compromise in a DPI parser is contained even when running as root.
+     app.start_workers(worker_startup_permit)?;
+ 
++    if matches.get_flag("stop-on-stdin-close") {
++        // Created after the sandbox transition so this thread inherits the
++        // same restrictions as the capture workers. EOF also covers a crashed
++        // desktop parent, including when no packets are arriving.
++        std::thread::Builder::new()
++            .name("stdin-shutdown".into())
++            .spawn(|| {
++                request_shutdown_on_eof(io::stdin().lock(), &SHUTDOWN_REQUESTED);
++            })?;
++    }
++
+     if headless {
+         return run_headless(&matches, &mut app);
+     }
+@@ -404,6 +429,7 @@ fn run_headless(matches: &clap::ArgMatches, app: &mut app::App) -> Result<()> {
+             .get_one::<u64>("duration")
+             .map(|seconds| Duration::from_secs(*seconds)),
+         filter_query: matches.get_one::<String>("filter").cloned(),
++        include_historic: matches.get_flag("include-historic"),
+     };
+     let stop_report = match crate::headless::run(app, io::stdout(), &options, &SHUTDOWN_REQUESTED) {
+         Ok(outcome) => outcome,
+@@ -661,3 +687,31 @@ fn initialize_windows_npcap() -> Result<()> {
+ 
+     Ok(())
+ }
++
++/// Consume the controller pipe without interpreting any commands or buffering
++/// its contents. Closing it requests the ordinary flushing shutdown path.
++fn request_shutdown_on_eof(mut reader: impl io::Read, shutdown: &std::sync::atomic::AtomicBool) {
++    let mut buffer = [0_u8; 256];
++    loop {
++        match reader.read(&mut buffer) {
++            Ok(0) => break,
++            Ok(_) => {}
++            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
++            Err(_) => break,
++        }
++    }
++    shutdown.store(true, std::sync::atomic::Ordering::Relaxed);
++}
++
++#[cfg(test)]
++mod desktop_tests {
++    use super::*;
++    use std::sync::atomic::{AtomicBool, Ordering};
++
++    #[test]
++    fn controller_eof_requests_shutdown_after_consuming_input() {
++        let shutdown = AtomicBool::new(false);
++        request_shutdown_on_eof(io::Cursor::new(vec![42; 1024]), &shutdown);
++        assert!(shutdown.load(Ordering::Relaxed));
++    }
++}
+diff --git a/src/cli.rs b/src/cli.rs
+index 3fdaa5c..3ebeacb 100644
+--- a/src/cli.rs
++++ b/src/cli.rs
+@@ -57,6 +57,26 @@ pub fn build_cli() -> Command {
+                 .help("Run without the interactive terminal UI")
+                 .action(clap::ArgAction::SetTrue),
+         )
++        .arg(
++            Arg::new("list-interfaces")
++                .long("list-interfaces")
++                .help("List capture interfaces as JSON and exit without starting capture")
++                .action(clap::ArgAction::SetTrue),
++        )
++        .arg(
++            Arg::new("stop-on-stdin-close")
++                .long("stop-on-stdin-close")
++                .help("Stop headless capture when the controlling stdin pipe closes")
++                .requires("headless")
++                .action(clap::ArgAction::SetTrue),
++        )
++        .arg(
++            Arg::new("include-historic")
++                .long("include-historic")
++                .help("Include retained closed connections in headless snapshots")
++                .requires("headless")
++                .action(clap::ArgAction::SetTrue),
++        )
+         .arg(
+             Arg::new("duration")
+                 .long("duration")
+@@ -316,6 +336,7 @@ mod tests {
+             .expect("default CLI arguments should parse");
+ 
+         assert!(!matches.get_flag("headless"));
++        assert!(!matches.get_flag("include-historic"));
+         assert_eq!(matches.get_one::<u64>("duration"), None);
+         assert_eq!(matches.get_one::<String>("output"), None);
+         assert_eq!(matches.get_one::<String>("filter"), None);
+@@ -327,6 +348,7 @@ mod tests {
+             .try_get_matches_from([
+                 "rustnet",
+                 "--headless",
++                "--include-historic",
+                 "--duration",
+                 "30",
+                 "--output",
+@@ -337,6 +359,7 @@ mod tests {
+             .expect("valid headless arguments should parse");
+ 
+         assert!(matches.get_flag("headless"));
++        assert!(matches.get_flag("include-historic"));
+         assert_eq!(matches.get_one::<u64>("duration"), Some(&30));
+         assert_eq!(
+             matches.get_one::<String>("output").map(String::as_str),
+@@ -362,6 +385,14 @@ mod tests {
+         }
+     }
+ 
++    #[test]
++    fn history_output_requires_headless() {
++        let error = build_cli()
++            .try_get_matches_from(["rustnet", "--include-historic"])
++            .unwrap_err();
++        assert_eq!(error.kind(), ErrorKind::MissingRequiredArgument);
++    }
++
+     #[test]
+     fn headless_only_controls_require_headless_mode() {
+         for args in [
+diff --git a/src/connection_details.rs b/src/connection_details.rs
+new file mode 100644
+index 0000000..d84da7c
+--- /dev/null
++++ b/src/connection_details.rs
+@@ -0,0 +1,412 @@
++//! Shared observed application fields for terminal details and headless consumers.
++use crate::network::types::{Connection, ProtocolState};
++use serde::Serialize;
++
++#[derive(Serialize)]
++pub(crate) struct DetailField {
++    pub label: &'static str,
++    pub value: Option<String>,
++    pub warning: bool,
++}
++
++#[derive(Default)]
++struct Fields(Vec<DetailField>);
++impl Fields {
++    fn app_rows(&mut self, rows: &[(&'static str, Option<String>)]) {
++        self.0.extend(rows.iter().map(|(label, value)| DetailField {
++            label,
++            value: value.clone(),
++            warning: false,
++        }));
++    }
++}
++
++pub(crate) fn application_fields(conn: &Connection) -> Vec<DetailField> {
++    let mut details = Fields::default();
++    if let Some(dpi) = &conn.dpi_info {
++        match &dpi.application {
++            crate::network::types::ApplicationProtocol::Http(info) => {
++                details.app_rows(&[
++                    ("HTTP Version", Some(info.version.to_string())),
++                    ("HTTP Method", info.method.clone()),
++                    ("HTTP Host", info.host.clone()),
++                    ("HTTP Path", info.path.clone()),
++                    ("HTTP Status", info.status_code.map(|s| s.to_string())),
++                    ("User-Agent", info.user_agent.clone()),
++                ]);
++            }
++            crate::network::types::ApplicationProtocol::Https(info) => {
++                let tls = info.tls_info.as_ref();
++                details.app_rows(&[
++                    ("SNI", tls.and_then(|t| t.sni.clone())),
++                    (
++                        "ALPN",
++                        tls.and_then(|t| (!t.alpn.is_empty()).then(|| t.alpn.join(", "))),
++                    ),
++                    (
++                        "TLS Version",
++                        tls.and_then(|t| t.version.map(|v| v.to_string())),
++                    ),
++                ]);
++                details.app_rows(&[("Cipher Suite", tls.and_then(|t| t.format_cipher_suite()))]);
++                if let Some(field) = details.0.last_mut() {
++                    field.warning = tls.and_then(|t| t.is_cipher_suite_secure()) == Some(false);
++                }
++            }
++            crate::network::types::ApplicationProtocol::Dns(info) => {
++                details.app_rows(&[
++                    ("DNS Query", info.query_name.clone()),
++                    ("DNS Type", info.query_type.map(|t| t.to_string())),
++                    ("DNS Response IPs", join_ips(&info.response_ips)),
++                    (
++                        "DNS Answer",
++                        (info.nodata == Some(true))
++                            .then(|| "no data (name exists, no record of this type)".to_string()),
++                    ),
++                    ("Transaction ID", Some(format!("0x{:04x}", info.txid))),
++                ]);
++            }
++            crate::network::types::ApplicationProtocol::Quic(info) => {
++                let tls = info.tls_info.as_ref();
++                details.app_rows(&[
++                    ("QUIC SNI", tls.and_then(|t| t.sni.clone())),
++                    (
++                        "QUIC ALPN",
++                        tls.and_then(|t| (!t.alpn.is_empty()).then(|| t.alpn.join(", "))),
++                    ),
++                    (
++                        "QUIC Version",
++                        info.version_string.as_deref().map(str::to_owned),
++                    ),
++                    ("Connection ID", info.connection_id_hex.clone()),
++                    ("Packet Type", Some(info.packet_type.to_string())),
++                    ("Connection State", Some(info.connection_state.to_string())),
++                ]);
++            }
++            crate::network::types::ApplicationProtocol::Ssh(info) => {
++                details.app_rows(&[
++                    ("SSH Version", info.version.as_ref().map(|v| v.to_string())),
++                    ("Connection State", Some(info.connection_state.to_string())),
++                    ("Server Software", info.server_software.clone()),
++                    ("Client Software", info.client_software.clone()),
++                    (
++                        "Algorithms",
++                        (!info.algorithms.is_empty()).then(|| info.algorithms.join(", ")),
++                    ),
++                    ("Auth Method", info.auth_method.clone()),
++                ]);
++            }
++            crate::network::types::ApplicationProtocol::Ntp(info) => {
++                details.app_rows(&[
++                    ("NTP Version", Some(info.version.to_string())),
++                    ("NTP Mode", Some(info.mode.to_string())),
++                    (
++                        "Stratum",
++                        (info.stratum != 0).then(|| info.stratum.to_string()),
++                    ),
++                ]);
++            }
++            crate::network::types::ApplicationProtocol::Mdns(info) => {
++                details.app_rows(&name_service_rows(
++                    info.query_name.as_ref(),
++                    info.query_type.as_ref(),
++                    &info.response_ips,
++                ));
++            }
++            crate::network::types::ApplicationProtocol::Llmnr(info) => {
++                let [name, query_type, ips] = name_service_rows(
++                    info.query_name.as_ref(),
++                    info.query_type.as_ref(),
++                    &info.response_ips,
++                );
++                details.app_rows(&[
++                    name,
++                    query_type,
++                    ips,
++                    ("Transaction ID", Some(format!("0x{:04x}", info.txid))),
++                ]);
++            }
++            crate::network::types::ApplicationProtocol::Dhcp(info) => {
++                details.app_rows(&[
++                    ("Message Type", Some(info.message_type.to_string())),
++                    ("Hostname", info.hostname.clone()),
++                    ("Client MAC", info.client_mac.clone()),
++                ]);
++            }
++            crate::network::types::ApplicationProtocol::Snmp(info) => {
++                details.app_rows(&[
++                    ("SNMP Version", Some(info.version.to_string())),
++                    ("PDU Type", Some(info.pdu_type.to_string())),
++                    ("Community", info.community.clone()),
++                ]);
++            }
++            crate::network::types::ApplicationProtocol::Ssdp(info) => {
++                details.app_rows(&[
++                    ("Method", Some(info.method.to_string())),
++                    ("Service Type", info.service_type.clone()),
++                ]);
++            }
++            crate::network::types::ApplicationProtocol::NetBios(info) => {
++                details.app_rows(&[
++                    ("Service", Some(info.service.to_string())),
++                    ("Opcode", Some(info.opcode.to_string())),
++                    ("Name", info.name.clone()),
++                    (
++                        "Transaction ID",
++                        Some(format!("0x{:04x}", info.transaction_id)),
++                    ),
++                ]);
++            }
++            crate::network::types::ApplicationProtocol::BitTorrent(info) => {
++                let extensions: Vec<&str> = [
++                    (info.supports_dht, "DHT"),
++                    (info.supports_extension, "Extension Protocol"),
++                    (info.supports_fast, "Fast"),
++                ]
++                .into_iter()
++                .filter_map(|(supported, name)| supported.then_some(name))
++                .collect();
++                details.app_rows(&[
++                    ("Type", Some(info.protocol_type.to_string())),
++                    ("Client", info.client.clone()),
++                    ("Info Hash", info.info_hash.clone()),
++                    ("DHT Method", info.dht_method.clone()),
++                    (
++                        "Extensions",
++                        (!extensions.is_empty()).then(|| extensions.join(", ")),
++                    ),
++                ]);
++            }
++            crate::network::types::ApplicationProtocol::Stun(info) => {
++                details.app_rows(&[
++                    ("Method", Some(info.method.to_string())),
++                    ("Class", Some(info.message_class.to_string())),
++                    (
++                        "Transaction ID",
++                        Some(crate::network::util::hex_encode(&info.transaction_id, "")),
++                    ),
++                    ("Software", info.software.clone()),
++                ]);
++            }
++            crate::network::types::ApplicationProtocol::MySql(info) => {
++                details.app_rows(&[
++                    ("Server Version", info.server_version.clone()),
++                    ("Connection ID", info.connection_id.map(|id| id.to_string())),
++                    (
++                        "TLS Advertised",
++                        info.tls_supported
++                            .map(|yes| if yes { "Yes" } else { "No" }.to_string()),
++                    ),
++                    (
++                        "TLS Request",
++                        info.tls_requested.then(|| "Observed".to_string()),
++                    ),
++                    (
++                        "SNI",
++                        info.tls_info.as_ref().and_then(|tls| tls.sni.clone()),
++                    ),
++                    (
++                        "TLS Version",
++                        info.tls_info
++                            .as_ref()
++                            .and_then(|tls| tls.version.map(|v| v.to_string())),
++                    ),
++                ]);
++            }
++            crate::network::types::ApplicationProtocol::Redis(info) => {
++                details.app_rows(&[
++                    ("Command", Some(info.command.clone())),
++                    (
++                        "Requested RESP",
++                        info.requested_version.map(|v| v.to_string()),
++                    ),
++                    (
++                        "Requested DB",
++                        info.requested_database.map(|db| db.to_string()),
++                    ),
++                ]);
++            }
++            crate::network::types::ApplicationProtocol::PostgreSql(info) => {
++                details.app_rows(&[
++                    (
++                        "Startup Version",
++                        info.protocol_minor.map(|v| format!("3.{v}")),
++                    ),
++                    ("Database", info.database.clone()),
++                    ("Client App", info.application_name.clone()),
++                    (
++                        "TLS Request",
++                        info.tls_requested.then(|| "Observed".to_string()),
++                    ),
++                    (
++                        "SNI",
++                        info.tls_info.as_ref().and_then(|tls| tls.sni.clone()),
++                    ),
++                    (
++                        "TLS Version",
++                        info.tls_info
++                            .as_ref()
++                            .and_then(|tls| tls.version.map(|v| v.to_string())),
++                    ),
++                ]);
++            }
++            crate::network::types::ApplicationProtocol::Ftp(info) => {
++                let response = match (info.response_code, &info.response_message) {
++                    (Some(code), Some(message)) => Some(format!("{} {}", code, message)),
++                    (Some(code), None) => Some(code.to_string()),
++                    (None, Some(message)) => Some(message.clone()),
++                    (None, None) => None,
++                };
++                details.app_rows(&[
++                    ("Message Type", Some(info.message_type.to_string())),
++                    ("Command", info.command.clone()),
++                    ("Arguments", info.args.clone()),
++                    ("Response", response),
++                    ("Username", info.username.clone()),
++                    ("Server Software", info.server_software.clone()),
++                    ("System Type", info.system_type.clone()),
++                ]);
++            }
++            crate::network::types::ApplicationProtocol::Mqtt(info) => {
++                details.app_rows(&[
++                    ("Packet Type", Some(info.packet_type.to_string())),
++                    ("Version", info.version.map(|v| v.to_string())),
++                    ("Client ID", info.client_id.clone()),
++                    ("Topic", info.topic.clone()),
++                    ("QoS", info.qos.map(|q| q.to_string())),
++                ]);
++            }
++            crate::network::types::ApplicationProtocol::WireGuard(info) => {
++                details.app_rows(&[("Packet Type", Some(info.packet_type.to_string()))]);
++            }
++            crate::network::types::ApplicationProtocol::OpenVpn(info) => {
++                details.app_rows(&[
++                    ("Packet Type", Some(info.packet_type.to_string())),
++                    ("Key ID", Some(info.key_id.to_string())),
++                ]);
++            }
++        }
++    } else if let ProtocolState::Arp(info) = &conn.protocol_state {
++        details.app_rows(&[
++            (
++                "Operation",
++                Some(
++                    match info.operation {
++                        crate::network::types::ArpOperation::Request => "Request",
++                        crate::network::types::ArpOperation::Reply => "Reply",
++                    }
++                    .to_string(),
++                ),
++            ),
++            ("Sender MAC", Some(info.sender_mac.clone())),
++            ("Sender Vendor", info.sender_vendor.clone()),
++            ("Sender IP", Some(info.sender_ip.to_string())),
++            ("Target MAC", Some(info.target_mac.clone())),
++            ("Target Vendor", info.target_vendor.clone()),
++            ("Target IP", Some(info.target_ip.to_string())),
++        ]);
++    } else if let ProtocolState::Icmp {
++        icmp_type,
++        icmp_id,
++        icmp_sequence,
++        ndp_neighbor,
++    } = &conn.protocol_state
++    {
++        let is_ipv6 = conn.local_addr.is_ipv6();
++        let neighbor = ndp_neighbor.as_ref().map(|n| match &n.vendor {
++            Some(vendor) => format!("{} at {} ({})", n.ip, n.mac, vendor),
++            None => format!("{} at {}", n.ip, n.mac),
++        });
++        details.app_rows(&[
++            (
++                "Message",
++                Some(crate::network::types::icmp_message_name(*icmp_type, is_ipv6).into_owned()),
++            ),
++            ("Echo ID", icmp_id.map(|id| id.to_string())),
++            ("Sequence", icmp_sequence.map(|seq| seq.to_string())),
++            ("NDP Neighbor", neighbor),
++        ]);
++    } else if let ProtocolState::Igmp {
++        igmp_type,
++        group_addr,
++    } = &conn.protocol_state
++    {
++        details.app_rows(&[
++            (
++                "Message",
++                Some(crate::network::types::igmp_message_name(*igmp_type).into_owned()),
++            ),
++            ("Group Address", group_addr.map(|addr| addr.to_string())),
++        ]);
++    } else {
++        details.app_rows(&[("Detected", None)]);
++    }
++
++    details.0
++}
++
++/// Comma-joined display form of a response-IP list, `None` when empty so the
++/// Application card renders its placeholder instead of `[]`-style debug
++/// output.
++fn join_ips(ips: &[std::net::IpAddr]) -> Option<String> {
++    (!ips.is_empty()).then(|| {
++        ips.iter()
++            .map(ToString::to_string)
++            .collect::<Vec<_>>()
++            .join(", ")
++    })
++}
++
++/// Shared Application-card row set for the name-service protocols whose info
++/// structs carry identical fields (mDNS and LLMNR are distinct types with the
++/// same query/response shape).
++fn name_service_rows(
++    query_name: Option<&String>,
++    query_type: Option<&crate::network::types::DnsQueryType>,
++    response_ips: &[std::net::IpAddr],
++) -> [(&'static str, Option<String>); 3] {
++    [
++        ("Query Name", query_name.cloned()),
++        ("Query Type", query_type.map(|t| t.to_string())),
++        ("Response IPs", join_ips(response_ips)),
++    ]
++}
++
++/// Outcomes that accompany protocol timing and request counters.
++pub(crate) fn health_fields(conn: &Connection) -> Vec<DetailField> {
++    use crate::network::types::ApplicationProtocol;
++    let mut fields = Fields::default();
++    match conn.dpi_info.as_ref().map(|d| &d.application) {
++        Some(ApplicationProtocol::Quic(q)) => fields.app_rows(&[
++            (
++                "Idle timeout",
++                q.idle_timeout.map(|d| format!("{} s", d.as_secs_f64())),
++            ),
++            (
++                "Connection close",
++                q.connection_close.as_ref().map(|c| {
++                    format!(
++                        "{} 0x{:x}",
++                        if c.frame_type == 0x1d {
++                            "application"
++                        } else {
++                            "transport"
++                        },
++                        c.error_code
++                    )
++                }),
++            ),
++        ]),
++        Some(ApplicationProtocol::Dns(d)) => fields.app_rows(&[(
++            "Last response code",
++            d.rcode
++                .map(|code| crate::network::types::dns_rcode_name(code).into_owned()),
++        )]),
++        Some(ApplicationProtocol::NetBios(n)) => fields.app_rows(&[(
++            "Last response status",
++            n.response_status.map(|status| status.to_string()),
++        )]),
++        _ => {}
++    }
++    fields.0
++}
+diff --git a/src/headless/mod.rs b/src/headless/mod.rs
+index 8c09c4f..465a7d2 100644
+--- a/src/headless/mod.rs
++++ b/src/headless/mod.rs
+@@ -78,6 +78,8 @@ pub struct HeadlessOptions {
+     pub duration: Option<Duration>,
+     /// Optional connection filter using the same syntax as the TUI.
+     pub filter_query: Option<String>,
++    /// Include retained closed connections in snapshots.
++    pub include_historic: bool,
+ }
+ 
+ /// Why a headless run ended.
+@@ -150,6 +152,7 @@ fn run_with_writer_deadline<W: Write + Send + 'static>(
+     shutdown_requested: &AtomicBool,
+     writer_deadline: Duration,
+ ) -> Result<StopReport> {
++    app.set_show_historic(options.include_historic);
+     let mut output = match AsyncOutput::spawn(writer) {
+         Ok(output) => output,
+         Err(error) => {
+diff --git a/src/headless/schema.rs b/src/headless/schema.rs
+index 6096fed..6a4737d 100644
+--- a/src/headless/schema.rs
++++ b/src/headless/schema.rs
+@@ -40,7 +40,25 @@ impl SnapshotEnvelope {
+             app.get_filtered_connections_with_generation(filter.unwrap_or_default());
+         let mut connections: Vec<_> = connections
+             .iter()
+-            .map(ConnectionSnapshot::from_connection)
++            .map(|connection| {
++                let mut snapshot = ConnectionSnapshot::from_connection(connection);
++                let resolver = app.get_dns_resolver();
++                snapshot.network_context = NetworkContextSnapshot {
++                    local_hostname: resolver
++                        .as_ref()
++                        .and_then(|r| r.get_hostname(&connection.local_addr.ip())),
++                    remote_hostname: resolver
++                        .as_ref()
++                        .and_then(|r| r.get_hostname(&connection.remote_addr.ip())),
++                    local_mac: app
++                        .lookup_neighbor(connection.local_addr.ip())
++                        .map(NeighborSnapshot::from),
++                    remote_mac: app
++                        .lookup_neighbor(connection.remote_addr.ip())
++                        .map(NeighborSnapshot::from),
++                };
++                snapshot
++            })
+             .collect();
+         connections.sort_unstable_by(|left, right| left.id.cmp(&right.id));
+ 
+@@ -201,6 +219,7 @@ impl SandboxSnapshot {
+ 
+ #[derive(Serialize)]
+ struct StatsSnapshot {
++    capture_accounting: crate::app::CaptureAccounting,
+     packets_captured: u64,
+     bytes_captured: u64,
+     packets_processed: u64,
+@@ -228,6 +247,7 @@ impl StatsSnapshot {
+     fn from_stats(stats: &AppStats) -> Self {
+         let load = |counter: &std::sync::atomic::AtomicU64| counter.load(Ordering::Relaxed);
+         Self {
++            capture_accounting: stats.capture_accounting(),
+             packets_captured: load(&stats.packets_captured),
+             bytes_captured: load(&stats.bytes_captured),
+             packets_processed: load(&stats.packets_processed),
+@@ -268,6 +288,13 @@ struct ConnectionSnapshot {
+     application: Option<&'static str>,
+     hostname: Option<String>,
+     hostname_source: Option<&'static str>,
++    protocol_details: Vec<crate::connection_details::DetailField>,
++    health_details: Vec<crate::connection_details::DetailField>,
++    tcp_health: Option<TcpHealthSnapshot>,
++    request_health: RequestHealthSnapshot,
++    network_context: NetworkContextSnapshot,
++    remote_scope: &'static str,
++    attributed_hostname: Option<AttributedHostnameSnapshot>,
+     traffic: TrafficSnapshot,
+     rtt: RttSnapshot,
+     geoip: Option<GeoIpSnapshot>,
+@@ -277,6 +304,28 @@ struct ConnectionSnapshot {
+     last_activity: String,
+     historic: bool,
+     closed_at: Option<String>,
++    lifecycle: Option<LifecycleSnapshot>,
++}
++
++#[derive(Serialize)]
++struct LifecycleSnapshot {
++    timeout_ms: u64,
++    remaining_ms: u64,
++}
++
++impl LifecycleSnapshot {
++    fn from_connection(connection: &Connection, now: SystemTime) -> Option<Self> {
++        if connection.is_historic {
++            return None;
++        }
++        let timeout = connection.get_timeout();
++        Some(Self {
++            timeout_ms: timeout.as_millis() as u64,
++            remaining_ms: timeout
++                .saturating_sub(connection.cleanup_age(now))
++                .as_millis() as u64,
++        })
++    }
+ }
+ 
+ impl ConnectionSnapshot {
+@@ -310,6 +359,9 @@ impl ConnectionSnapshot {
+                     .executable
+                     .as_ref()
+                     .map(|path| path.display().to_string()),
++                user_group: connection
++                    .process_uid
++                    .map(|uid| crate::accounts::format_user_group(uid, connection.process_gid)),
+                 uid: connection.process_uid,
+                 gid: connection.process_gid,
+                 attribution_match: connection
+@@ -388,6 +440,49 @@ impl ConnectionSnapshot {
+                 .map(|dpi| dpi.application.sort_key()),
+             hostname,
+             hostname_source,
++            protocol_details: crate::connection_details::application_fields(connection),
++            health_details: crate::connection_details::health_fields(connection),
++            tcp_health: connection
++                .tcp_analytics
++                .as_ref()
++                .map(|a| TcpHealthSnapshot {
++                    retransmits: a.retransmit_count,
++                    out_of_order: a.out_of_order_count,
++                    duplicate_acks: a.duplicate_ack_count,
++                    fast_retransmits: a.fast_retransmit_count,
++                    local_receive_window: a.last_window_out.map(WindowSnapshot::from),
++                    remote_receive_window: a.last_window_in.map(WindowSnapshot::from),
++                }),
++            request_health: RequestHealthSnapshot {
++                retries: connection
++                    .protocol_health
++                    .request_observed
++                    .then_some(connection.protocol_health.request_retry_count),
++                timeouts: connection
++                    .protocol_health
++                    .request_observed
++                    .then_some(connection.protocol_health.request_timeout_count),
++                quic_retries: connection.protocol_health.quic_retry_count,
++                quic_version_negotiations: connection
++                    .protocol_health
++                    .quic_version_negotiation_count,
++            },
++            network_context: NetworkContextSnapshot::default(),
++            remote_scope: if connection.remote_addr_kind
++                == crate::network::types::AddrKind::Broadcast
++            {
++                crate::network::bogon::Scope::Broadcast
++            } else {
++                crate::network::bogon::classify(connection.remote_addr.ip())
++            }
++            .label(),
++            attributed_hostname: connection.attributed_hostname.as_ref().map(|a| {
++                AttributedHostnameSnapshot {
++                    name: a.name.clone(),
++                    source: "captured_dns",
++                    observed_at: timestamp(a.observed_at),
++                }
++            }),
+             traffic: TrafficSnapshot {
+                 bytes_sent: connection.bytes_sent,
+                 bytes_received: connection.bytes_received,
+@@ -427,9 +522,66 @@ impl ConnectionSnapshot {
+             last_activity: timestamp(connection.last_activity),
+             historic: connection.is_historic,
+             closed_at: connection.closed_at.map(timestamp),
++            lifecycle: LifecycleSnapshot::from_connection(connection, SystemTime::now()),
++        }
++    }
++}
++
++#[derive(Serialize, Default)]
++struct NetworkContextSnapshot {
++    local_hostname: Option<String>,
++    remote_hostname: Option<String>,
++    local_mac: Option<NeighborSnapshot>,
++    remote_mac: Option<NeighborSnapshot>,
++}
++#[derive(Serialize)]
++struct NeighborSnapshot {
++    mac: String,
++    vendor: Option<String>,
++}
++impl From<crate::network::neighbors::NeighborEntry> for NeighborSnapshot {
++    fn from(n: crate::network::neighbors::NeighborEntry) -> Self {
++        Self {
++            mac: n.mac,
++            vendor: n.vendor,
++        }
++    }
++}
++#[derive(Serialize)]
++struct AttributedHostnameSnapshot {
++    name: String,
++    source: &'static str,
++    observed_at: String,
++}
++#[derive(Serialize)]
++struct TcpHealthSnapshot {
++    retransmits: u64,
++    out_of_order: u64,
++    duplicate_acks: u64,
++    fast_retransmits: u64,
++    local_receive_window: Option<WindowSnapshot>,
++    remote_receive_window: Option<WindowSnapshot>,
++}
++#[derive(Serialize)]
++struct WindowSnapshot {
++    bytes: u64,
++    scale_known: bool,
++}
++impl From<crate::network::types::WindowSample> for WindowSnapshot {
++    fn from(w: crate::network::types::WindowSample) -> Self {
++        Self {
++            bytes: w.bytes(),
++            scale_known: w.scale_known,
+         }
+     }
+ }
++#[derive(Serialize)]
++struct RequestHealthSnapshot {
++    retries: Option<u64>,
++    timeouts: Option<u64>,
++    quic_retries: u64,
++    quic_version_negotiations: u64,
++}
+ 
+ #[derive(Serialize)]
+ struct EndpointSnapshot {
+@@ -444,6 +596,7 @@ struct ProcessSnapshot {
+     ppid: Option<u32>,
+     name: Option<String>,
+     executable: Option<String>,
++    user_group: Option<String>,
+     uid: Option<u32>,
+     gid: Option<u32>,
+     attribution_match: Option<&'static str>,
+@@ -548,6 +701,83 @@ mod tests {
+     };
+     use crate::network::types::{Protocol, ProtocolState, TcpState};
+ 
++    #[test]
++    fn rich_connection_details_keep_observations_and_missing_measurements_distinct() {
++        use crate::network::types::{
++            ApplicationProtocol, DpiInfo, HttpsInfo, TlsInfo, TlsVersion, WindowSample,
++        };
++        let app = app_with_connections();
++        let mut c = app
++            .get_connections()
++            .into_iter()
++            .find(|c| c.protocol == Protocol::Tcp)
++            .unwrap();
++        c.dpi_info = Some(DpiInfo {
++            application: ApplicationProtocol::Https(HttpsInfo {
++                tls_info: Some(TlsInfo {
++                    version: Some(TlsVersion::Tls13),
++                    sni: Some("example.org".into()),
++                    alpn: vec!["h2".into()],
++                    cipher_suite: Some(0x1301),
++                }),
++            }),
++        });
++        c.packets_received = 42;
++        let tcp = c.tcp_analytics.as_mut().unwrap();
++        tcp.retransmit_count = 3;
++        tcp.last_window_in = Some(WindowSample {
++            raw: 1024,
++            shift: 0,
++            scale_known: false,
++        });
++        tcp.last_window_out = Some(WindowSample {
++            raw: 1024,
++            shift: 7,
++            scale_known: true,
++        });
++        let value = serde_json::to_value(ConnectionSnapshot::from_connection(&c)).unwrap();
++        let fields = value["protocol_details"].as_array().unwrap();
++        assert!(
++            fields
++                .iter()
++                .any(|f| f["label"] == "SNI" && f["value"] == "example.org")
++        );
++        assert!(
++            fields
++                .iter()
++                .any(|f| f["label"] == "TLS Version" && f["value"] == "TLS 1.3")
++        );
++        assert!(
++            fields
++                .iter()
++                .any(|f| f["label"] == "ALPN" && f["value"] == "h2")
++        );
++        assert!(fields.iter().any(
++            |f| f["label"] == "Cipher Suite" && f["value"].as_str().unwrap().contains("0x1301")
++        ));
++        assert_eq!(value["tcp_health"]["retransmits"], 3);
++        assert_eq!(value["tcp_health"]["local_receive_window"]["bytes"], 131072);
++        assert_eq!(
++            value["tcp_health"]["remote_receive_window"]["scale_known"],
++            false
++        );
++        assert_eq!(value["traffic"]["packets_received"], 42);
++        assert!(value["request_health"]["retries"].is_null());
++        assert!(value["network_context"]["remote_mac"].is_null());
++        c.dpi_info = Some(DpiInfo {
++            application: ApplicationProtocol::Https(HttpsInfo { tls_info: None }),
++        });
++        let value = serde_json::to_value(ConnectionSnapshot::from_connection(&c)).unwrap();
++        assert_eq!(value["protocol_details"].as_array().unwrap().len(), 4);
++        assert!(
++            value["protocol_details"]
++                .as_array()
++                .unwrap()
++                .iter()
++                .all(|f| f["value"].is_null())
++        );
++    }
++
+     #[test]
+     fn capture_totals_survive_stats_snapshot_and_reset_in_wire_output() {
+         let stats = AppStats::default();
+@@ -662,6 +892,7 @@ mod tests {
+             object_keys(&value["stats"]),
+             [
+                 "bytes_captured",
++                "capture_accounting",
+                 "capture_packets_dropped",
+                 "connections_tracked",
+                 "interface_packets_dropped",
+@@ -695,26 +926,34 @@ mod tests {
+             object_keys(connection),
+             [
+                 "application",
++                "attributed_hostname",
+                 "closed_at",
+                 "container",
+                 "created_at",
+                 "direction",
+                 "geoip",
++                "health_details",
+                 "historic",
+                 "hostname",
+                 "hostname_source",
+                 "id",
+                 "kubernetes",
+                 "last_activity",
++                "lifecycle",
+                 "local",
++                "network_context",
+                 "observed_vlan_ids",
+                 "process",
+                 "protocol",
++                "protocol_details",
+                 "remote",
+                 "remote_is_gateway",
++                "remote_scope",
++                "request_health",
+                 "rtt",
+                 "service",
+                 "state",
++                "tcp_health",
+                 "traffic",
+             ]
+         );
+@@ -737,6 +976,7 @@ mod tests {
+                 "pid",
+                 "ppid",
+                 "uid",
++                "user_group",
+             ]
+         );
+         assert_eq!(
+@@ -874,6 +1114,32 @@ mod tests {
+         assert_eq!(live["remote"], reused["remote"]);
+     }
+ 
++    #[test]
++    fn lifecycle_uses_engine_cleanup_clock_and_stops_at_archival() {
++        let now = SystemTime::now();
++        let mut connection = Connection::new(
++            Protocol::Tcp,
++            "127.0.0.1:45000".parse().unwrap(),
++            "93.184.216.34:443".parse().unwrap(),
++            ProtocolState::Tcp(TcpState::Closed),
++        );
++        let timeout = connection.get_timeout();
++        connection.terminal_since = Some(now - timeout / 2);
++        connection.last_activity = now;
++        let lifecycle = LifecycleSnapshot::from_connection(&connection, now).unwrap();
++        assert_eq!(lifecycle.timeout_ms, timeout.as_millis() as u64);
++        assert_eq!(lifecycle.remaining_ms, (timeout / 2).as_millis() as u64);
++        let expired = LifecycleSnapshot::from_connection(&connection, now + timeout).unwrap();
++        assert_eq!(expired.remaining_ms, 0);
++        connection.is_historic = true;
++        assert!(LifecycleSnapshot::from_connection(&connection, now).is_none());
++        connection.is_historic = false;
++        connection.protocol_state = ProtocolState::Tcp(TcpState::Established);
++        connection.last_activity = now - Duration::from_secs(10);
++        let active = LifecycleSnapshot::from_connection(&connection, now).unwrap();
++        assert_eq!(active.remaining_ms, active.timeout_ms - 10_000);
++    }
++
+     #[test]
+     fn traffic_rates_serialize_explicit_byte_units() {
+         let mut connection = Connection::new(
+diff --git a/src/headless/tests.rs b/src/headless/tests.rs
+index f45b33c..26646ab 100644
+--- a/src/headless/tests.rs
++++ b/src/headless/tests.rs
+@@ -7,6 +7,7 @@ use serde::{Serialize, Serializer};
+ use serde_json::Value;
+ use std::io;
+ use std::sync::{Arc, Mutex, mpsc};
++use std::time::SystemTime;
+ 
+ #[derive(Clone, Default)]
+ struct SharedWriter(Arc<Mutex<Vec<u8>>>);
+@@ -95,6 +96,45 @@ pub(super) fn object_keys(value: &Value) -> Vec<&str> {
+     keys
+ }
+ 
++#[test]
++fn retained_history_is_exported_only_when_requested() {
++    for include_historic in [false, true] {
++        for format in [HeadlessFormat::Json, HeadlessFormat::JsonLines] {
++            let mut app = app_with_connections();
++            app.cleanup_connections_for_test(SystemTime::now() + Duration::from_secs(86400));
++            let output = SharedWriter::default();
++            let outcome = run(
++                &mut app,
++                output.clone(),
++                &HeadlessOptions {
++                    format,
++                    duration: Some(Duration::ZERO),
++                    filter_query: Some("proto:tcp".into()),
++                    include_historic,
++                },
++                &AtomicBool::new(false),
++            )
++            .unwrap();
++            assert_eq!(outcome.output_errors, 0);
++            let records = output.bytes();
++            let final_record = records
++                .split(|byte| *byte == b'\n')
++                .rfind(|line| !line.is_empty())
++                .unwrap();
++            let value: Value = serde_json::from_slice(final_record).unwrap();
++            assert_eq!(value["runtime"]["termination_reason"], "duration_elapsed");
++            let connections = value["connections"].as_array().unwrap();
++            assert_eq!(connections.len(), usize::from(include_historic));
++            if include_historic {
++                assert_eq!(connections[0]["historic"], true);
++                assert_eq!(connections[0]["protocol"], "TCP");
++                assert!(connections[0]["closed_at"].is_string());
++                assert_eq!(connections[0]["traffic"]["incoming_bytes_per_second"], 0.0);
++            }
++        }
++    }
++}
++
+ #[test]
+ fn json_writes_one_final_versioned_snapshot() {
+     let mut app = app_with_connections();
+@@ -103,6 +143,7 @@ fn json_writes_one_final_versioned_snapshot() {
+         &mut app,
+         output.clone(),
+         &HeadlessOptions {
++            include_historic: false,
+             format: HeadlessFormat::Json,
+             duration: Some(Duration::ZERO),
+             filter_query: None,
+@@ -142,6 +183,7 @@ fn jsonl_emits_an_initial_snapshot_and_applies_filter() {
+         &mut app,
+         output.clone(),
+         &HeadlessOptions {
++            include_historic: false,
+             format: HeadlessFormat::JsonLines,
+             duration: Some(Duration::ZERO),
+             filter_query: Some("proto:tcp".to_string()),
+@@ -190,6 +232,7 @@ fn broken_pipe_is_a_clean_exit() {
+         &mut app,
+         BrokenPipeWriter,
+         &HeadlessOptions {
++            include_historic: false,
+             format: HeadlessFormat::JsonLines,
+             duration: None,
+             filter_query: None,
+@@ -221,6 +264,7 @@ fn broken_pipe_while_flushing_is_a_clean_exit() {
+         &mut app,
+         FlushBrokenPipeWriter(Vec::new()),
+         &HeadlessOptions {
++            include_historic: false,
+             format: HeadlessFormat::JsonLines,
+             duration: None,
+             filter_query: None,
+@@ -252,6 +296,7 @@ fn non_pipe_writer_failure_is_an_error() {
+         &mut app,
+         FailedWriter,
+         &HeadlessOptions {
++            include_historic: false,
+             format: HeadlessFormat::JsonLines,
+             duration: None,
+             filter_query: None,
+@@ -283,6 +328,7 @@ fn writer_panic_is_joined_and_reported() {
+         &mut app,
+         PanicWriter,
+         &HeadlessOptions {
++            include_historic: false,
+             format: HeadlessFormat::JsonLines,
+             duration: None,
+             filter_query: None,
+@@ -448,6 +494,7 @@ fn stalled_writer_cannot_block_duration_shutdown() {
+         &mut app,
+         writer,
+         &HeadlessOptions {
++            include_historic: false,
+             format: HeadlessFormat::JsonLines,
+             duration: Some(Duration::from_millis(20)),
+             filter_query: None,
+@@ -480,6 +527,7 @@ fn stalled_flush_cannot_block_duration_shutdown() {
+         &mut app,
+         writer,
+         &HeadlessOptions {
++            include_historic: false,
+             format: HeadlessFormat::JsonLines,
+             duration: Some(Duration::from_millis(20)),
+             filter_query: None,
+@@ -511,6 +559,7 @@ fn stalled_writer_cannot_block_signal_shutdown() {
+         &mut app,
+         writer,
+         &HeadlessOptions {
++            include_historic: false,
+             format: HeadlessFormat::JsonLines,
+             duration: None,
+             filter_query: None,
+@@ -676,6 +725,7 @@ fn capture_failure_stops_an_indefinite_run() {
+         &mut app,
+         output.clone(),
+         &HeadlessOptions {
++            include_historic: false,
+             format: HeadlessFormat::Json,
+             duration: None,
+             filter_query: None,
+@@ -707,6 +757,7 @@ fn capture_failure_wins_a_simultaneous_normal_exit() {
+             &mut app,
+             output.clone(),
+             &HeadlessOptions {
++                include_historic: false,
+                 format,
+                 duration: Some(Duration::ZERO),
+                 filter_query: None,
+@@ -739,6 +790,7 @@ fn unexpected_critical_worker_exit_stops_an_indefinite_run() {
+         &mut app,
+         output.clone(),
+         &HeadlessOptions {
++            include_historic: false,
+             format: HeadlessFormat::Json,
+             duration: None,
+             filter_query: None,
+@@ -762,6 +814,7 @@ fn shared_shutdown_condition_ends_json_mode() {
+         &mut app,
+         output.clone(),
+         &HeadlessOptions {
++            include_historic: false,
+             format: HeadlessFormat::Json,
+             duration: None,
+             filter_query: None,
+diff --git a/src/lib.rs b/src/lib.rs
+index 9668259..bd19866 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -15,10 +15,12 @@
+ //! The library surface is unstable and intended for internal use; the
+ //! supported product is the `rustnet` binary.
+ 
++mod accounts;
+ pub mod app;
+ pub mod bootstrap;
+ pub mod cli;
+ pub mod config;
++mod connection_details;
+ pub(crate) mod export;
+ pub(crate) mod filter;
+ pub mod headless;
+diff --git a/src/ui/mod.rs b/src/ui/mod.rs
+index 60fad03..a9abe2b 100644
+--- a/src/ui/mod.rs
++++ b/src/ui/mod.rs
+@@ -2303,7 +2303,7 @@ mod snapshot_tests {
+         assert!(attributed.contains("1900"));
+         assert!(attributed.contains("/usr/lib/firefox/firefox"));
+         assert!(attributed.contains("systemd > bash > firefox"));
+-        assert!(attributed.contains(&tabs::details::format_user_group(1000, Some(1000))));
++        assert!(attributed.contains(&crate::accounts::format_user_group(1000, Some(1000))));
+         assert!(attributed.contains("exact tuple"));
+     }
+ 
+diff --git a/src/ui/tabs/details.rs b/src/ui/tabs/details.rs
+index ccd34c8..165df30 100644
+--- a/src/ui/tabs/details.rs
++++ b/src/ui/tabs/details.rs
+@@ -4,6 +4,7 @@
+ //! helpers that build the label/value lines and the click-to-copy
+ //! registry.
+ 
++use crate::accounts::format_user_group;
+ use anyhow::Result;
+ use ratatui::{
+     Frame,
+@@ -15,14 +16,6 @@ use ratatui::{
+ 
+ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind};
+ 
+-#[cfg(unix)]
+-use std::{
+-    collections::HashMap,
+-    mem::MaybeUninit,
+-    ptr,
+-    sync::{Mutex, OnceLock},
+-};
+-
+ /// The DPI application payload of `$conn` when it was classified as the
+ /// given `ApplicationProtocol` variant.
+ macro_rules! app_info {
+@@ -329,146 +322,6 @@ fn request_health_fields(details: &mut DetailsBuilder<'_>, conn: &Connection) {
+     );
+ }
+ 
+-#[cfg(unix)]
+-static USER_NAMES: OnceLock<Mutex<HashMap<u32, Option<String>>>> = OnceLock::new();
+-#[cfg(unix)]
+-static GROUP_NAMES: OnceLock<Mutex<HashMap<u32, Option<String>>>> = OnceLock::new();
+-
+-#[cfg(unix)]
+-fn account_name_from_buffer(name: *const libc::c_char, buffer: &[libc::c_char]) -> Option<String> {
+-    if name.is_null() {
+-        return None;
+-    }
+-
+-    let buffer_start = buffer.as_ptr() as usize;
+-    let buffer_end = buffer_start.checked_add(buffer.len())?;
+-    let name_address = name as usize;
+-    if !(buffer_start..buffer_end).contains(&name_address) {
+-        return None;
+-    }
+-
+-    let name_start = name_address - buffer_start;
+-    let name_len = buffer[name_start..].iter().position(|byte| *byte == 0)?;
+-    let name_bytes: Vec<u8> = buffer[name_start..name_start + name_len]
+-        .iter()
+-        .map(|byte| byte.to_ne_bytes()[0])
+-        .collect();
+-    Some(String::from_utf8_lossy(&name_bytes).into_owned())
+-}
+-
+-/// Resolve an account id to its name through a `getpwuid_r`-shaped libc call.
+-///
+-/// `name_of` projects the name pointer out of a resolved entry; the name
+-/// itself is read from `buffer` only after bounds validation.
+-#[cfg(unix)]
+-fn resolve_account_name<T>(
+-    id: u32,
+-    getter: unsafe extern "C" fn(
+-        u32,
+-        *mut T,
+-        *mut libc::c_char,
+-        libc::size_t,
+-        *mut *mut T,
+-    ) -> libc::c_int,
+-    name_of: fn(&T) -> *const libc::c_char,
+-) -> Option<String> {
+-    let mut buffer: Vec<libc::c_char> = vec![0; 1024];
+-    loop {
+-        let mut entry = MaybeUninit::<T>::uninit();
+-        let entry_ptr = entry.as_mut_ptr();
+-        let mut result = ptr::null_mut();
+-        // SAFETY: `entry` and `buffer` are writable for the sizes supplied,
+-        // and `result` is an out-pointer inspected only after a successful call.
+-        let status = unsafe {
+-            getter(
+-                id,
+-                entry_ptr,
+-                buffer.as_mut_ptr(),
+-                buffer.len(),
+-                &mut result,
+-            )
+-        };
+-        if status == 0 {
+-            if result != entry_ptr {
+-                return None;
+-            }
+-            // SAFETY: a successful lookup that returns `entry_ptr` initialized
+-            // the caller-owned entry.
+-            let entry = unsafe { entry.assume_init() };
+-            return account_name_from_buffer(name_of(&entry), &buffer);
+-        }
+-        if status != libc::ERANGE || buffer.len() >= 1024 * 1024 {
+-            return None;
+-        }
+-        buffer.resize(buffer.len() * 2, 0);
+-    }
+-}
+-
+-#[cfg(unix)]
+-fn resolve_user_name(uid: u32) -> Option<String> {
+-    resolve_account_name(uid, libc::getpwuid_r, |entry: &libc::passwd| {
+-        entry.pw_name.cast_const()
+-    })
+-}
+-
+-#[cfg(unix)]
+-fn resolve_group_name(gid: u32) -> Option<String> {
+-    resolve_account_name(gid, libc::getgrgid_r, |entry: &libc::group| {
+-        entry.gr_name.cast_const()
+-    })
+-}
+-
+-/// Names are resolved once per id and cached for the process lifetime,
+-/// including failures. The first lookup can stall a frame on hosts backed by
+-/// directory services, and a later account rename stays stale; both are
+-/// acceptable for a TUI session.
+-#[cfg(unix)]
+-fn cached_account_name(
+-    cache: &'static OnceLock<Mutex<HashMap<u32, Option<String>>>>,
+-    id: u32,
+-    resolve: fn(u32) -> Option<String>,
+-) -> Option<String> {
+-    let cache = cache.get_or_init(|| Mutex::new(HashMap::new()));
+-    if let Some(name) = cache.lock().expect("account name cache poisoned").get(&id) {
+-        return name.clone();
+-    }
+-
+-    let name = resolve(id);
+-    cache
+-        .lock()
+-        .expect("account name cache poisoned")
+-        .insert(id, name.clone());
+-    name
+-}
+-
+-fn user_group_label(
+-    uid: u32,
+-    gid: Option<u32>,
+-    user_name: Option<String>,
+-    group_name: Option<String>,
+-) -> String {
+-    let user = user_name.unwrap_or_else(|| uid.to_string());
+-    let Some(gid) = gid else {
+-        return user;
+-    };
+-    let group = group_name.unwrap_or_else(|| gid.to_string());
+-    format!("{user}:{group}")
+-}
+-
+-pub(in crate::ui) fn format_user_group(uid: u32, gid: Option<u32>) -> String {
+-    #[cfg(unix)]
+-    let user_name = cached_account_name(&USER_NAMES, uid, resolve_user_name);
+-    #[cfg(not(unix))]
+-    let user_name = None;
+-
+-    #[cfg(unix)]
+-    let group_name = gid.and_then(|gid| cached_account_name(&GROUP_NAMES, gid, resolve_group_name));
+-    #[cfg(not(unix))]
+-    let group_name = None;
+-
+-    user_group_label(uid, gid, user_name, group_name)
+-}
+-
+ /// Shorten an executable path for a one-row display slot.
+ ///
+ /// Detail rows are clipped at the pane edge, which for a long path cuts off
+@@ -638,33 +491,6 @@ fn format_quic_close(close: &crate::network::types::QuicCloseInfo) -> String {
+     format!("{} 0x{:x}", origin, close.error_code)
+ }
+ 
+-/// Comma-joined display form of a response-IP list, `None` when empty so the
+-/// Application card renders its placeholder instead of `[]`-style debug
+-/// output.
+-fn join_ips(ips: &[std::net::IpAddr]) -> Option<String> {
+-    (!ips.is_empty()).then(|| {
+-        ips.iter()
+-            .map(ToString::to_string)
+-            .collect::<Vec<_>>()
+-            .join(", ")
+-    })
+-}
+-
+-/// Shared Application-card row set for the name-service protocols whose info
+-/// structs carry identical fields (mDNS and LLMNR are distinct types with the
+-/// same query/response shape).
+-fn name_service_rows(
+-    query_name: Option<&String>,
+-    query_type: Option<&crate::network::types::DnsQueryType>,
+-    response_ips: &[std::net::IpAddr],
+-) -> [(&'static str, Option<String>); 3] {
+-    [
+-        ("Query Name", query_name.cloned()),
+-        ("Query Type", query_type.map(|t| t.to_string())),
+-        ("Response IPs", join_ips(response_ips)),
+-    ]
+-}
+-
+ /// Endpoint address with a broadcast/multicast annotation when the address
+ /// is a group or broadcast destination rather than an actual host.
+ fn annotated_addr(addr: std::net::SocketAddr, kind: AddrKind) -> String {
+@@ -1361,360 +1187,27 @@ pub(in crate::ui) fn draw_connection_details(
+             format!("Application: {}", dpi.application.sort_key()),
+             theme::bold_fg(dpi_color(&dpi.application)),
+         );
+-
+-        // Protocol-specific details. Each protocol class renders a fixed row
+-        // set: absent data shows the placeholder instead of dropping the row,
+-        // so labels never move while navigating between connections of the
+-        // same class (and the card's height never depends on the data).
+-        match &dpi.application {
+-            crate::network::types::ApplicationProtocol::Http(info) => {
+-                details.app_rows(&[
+-                    ("HTTP Version", Some(info.version.to_string())),
+-                    ("HTTP Method", info.method.clone()),
+-                    ("HTTP Host", info.host.clone()),
+-                    ("HTTP Path", info.path.clone()),
+-                    ("HTTP Status", info.status_code.map(|s| s.to_string())),
+-                    ("User-Agent", info.user_agent.clone()),
+-                ]);
+-            }
+-            crate::network::types::ApplicationProtocol::Https(info) => {
+-                // The full row set renders even before the handshake is
+-                // parsed (tls_info still None): a heading-only card would
+-                // read as a rendering glitch rather than as pending data.
+-                let tls = info.tls_info.as_ref();
+-                details.app_rows(&[
+-                    ("SNI", tls.and_then(|t| t.sni.clone())),
+-                    (
+-                        "ALPN",
+-                        tls.and_then(|t| (!t.alpn.is_empty()).then(|| t.alpn.join(", "))),
+-                    ),
+-                    (
+-                        "TLS Version",
+-                        tls.and_then(|t| t.version.map(|v| v.to_string())),
+-                    ),
+-                ]);
+-                // Escape hatch from app_rows: the cipher keeps its ok/warn
+-                // color so a weak suite still stands out.
+-                match tls.and_then(|t| t.format_cipher_suite()) {
+-                    Some(cipher) => {
+-                        let cipher_color = if tls
+-                            .and_then(|t| t.is_cipher_suite_secure())
+-                            .unwrap_or(false)
+-                        {
+-                            theme::ok()
+-                        } else {
+-                            theme::warn()
+-                        };
+-                        details.field_styled("Cipher Suite", cipher, theme::fg(cipher_color));
+-                    }
+-                    None => details.field("Cipher Suite", NONE_PLACEHOLDER.to_string()),
+-                }
+-            }
+-            crate::network::types::ApplicationProtocol::Dns(info) => {
+-                // The Answer row disambiguates "record doesn't exist" from
+-                // "answer not parsed": a NOERROR response whose answer
+-                // section held no record of the queried type is a deliberate
+-                // empty answer (NODATA).
+-                details.app_rows(&[
+-                    ("DNS Query", info.query_name.clone()),
+-                    ("DNS Type", info.query_type.map(|t| t.to_string())),
+-                    ("DNS Response IPs", join_ips(&info.response_ips)),
+-                    (
+-                        "DNS Answer",
+-                        (info.nodata == Some(true))
+-                            .then(|| "no data (name exists, no record of this type)".to_string()),
+-                    ),
+-                    ("Transaction ID", Some(format!("0x{:04x}", info.txid))),
+-                ]);
+-            }
+-            crate::network::types::ApplicationProtocol::Quic(info) => {
+-                let tls = info.tls_info.as_ref();
+-                details.app_rows(&[
+-                    ("QUIC SNI", tls.and_then(|t| t.sni.clone())),
+-                    (
+-                        "QUIC ALPN",
+-                        tls.and_then(|t| (!t.alpn.is_empty()).then(|| t.alpn.join(", "))),
+-                    ),
+-                    (
+-                        "QUIC Version",
+-                        info.version_string.as_deref().map(str::to_owned),
+-                    ),
+-                    ("Connection ID", info.connection_id_hex.clone()),
+-                    ("Packet Type", Some(info.packet_type.to_string())),
+-                    ("Connection State", Some(info.connection_state.to_string())),
+-                ]);
+-            }
+-            crate::network::types::ApplicationProtocol::Ssh(info) => {
+-                details.app_rows(&[
+-                    ("SSH Version", info.version.as_ref().map(|v| v.to_string())),
+-                    ("Connection State", Some(info.connection_state.to_string())),
+-                    ("Server Software", info.server_software.clone()),
+-                    ("Client Software", info.client_software.clone()),
+-                    (
+-                        "Algorithms",
+-                        (!info.algorithms.is_empty()).then(|| info.algorithms.join(", ")),
+-                    ),
+-                    ("Auth Method", info.auth_method.clone()),
+-                ]);
+-            }
+-            crate::network::types::ApplicationProtocol::Ntp(info) => {
+-                // Stratum 0 marks an unspecified/invalid stratum (RFC 5905),
+-                // so it renders as the placeholder rather than a value.
+-                details.app_rows(&[
+-                    ("NTP Version", Some(info.version.to_string())),
+-                    ("NTP Mode", Some(info.mode.to_string())),
+-                    (
+-                        "Stratum",
+-                        (info.stratum != 0).then(|| info.stratum.to_string()),
+-                    ),
+-                ]);
+-            }
+-            crate::network::types::ApplicationProtocol::Mdns(info) => {
+-                details.app_rows(&name_service_rows(
+-                    info.query_name.as_ref(),
+-                    info.query_type.as_ref(),
+-                    &info.response_ips,
+-                ));
+-            }
+-            crate::network::types::ApplicationProtocol::Llmnr(info) => {
+-                // Unlike mDNS, LLMNR keeps its transaction ID (used for
+-                // response timing), so its card carries one extra row.
+-                let [name, query_type, ips] = name_service_rows(
+-                    info.query_name.as_ref(),
+-                    info.query_type.as_ref(),
+-                    &info.response_ips,
+-                );
+-                details.app_rows(&[
+-                    name,
+-                    query_type,
+-                    ips,
+-                    ("Transaction ID", Some(format!("0x{:04x}", info.txid))),
+-                ]);
+-            }
+-            crate::network::types::ApplicationProtocol::Dhcp(info) => {
+-                details.app_rows(&[
+-                    ("Message Type", Some(info.message_type.to_string())),
+-                    ("Hostname", info.hostname.clone()),
+-                    ("Client MAC", info.client_mac.clone()),
+-                ]);
+-            }
+-            crate::network::types::ApplicationProtocol::Snmp(info) => {
+-                details.app_rows(&[
+-                    ("SNMP Version", Some(info.version.to_string())),
+-                    ("PDU Type", Some(info.pdu_type.to_string())),
+-                    ("Community", info.community.clone()),
+-                ]);
+-            }
+-            crate::network::types::ApplicationProtocol::Ssdp(info) => {
+-                details.app_rows(&[
+-                    ("Method", Some(info.method.to_string())),
+-                    ("Service Type", info.service_type.clone()),
+-                ]);
+-            }
+-            crate::network::types::ApplicationProtocol::NetBios(info) => {
+-                details.app_rows(&[
+-                    ("Service", Some(info.service.to_string())),
+-                    ("Opcode", Some(info.opcode.to_string())),
+-                    ("Name", info.name.clone()),
+-                    (
+-                        "Transaction ID",
+-                        Some(format!("0x{:04x}", info.transaction_id)),
+-                    ),
+-                ]);
+-            }
+-            crate::network::types::ApplicationProtocol::BitTorrent(info) => {
+-                let extensions: Vec<&str> = [
+-                    (info.supports_dht, "DHT"),
+-                    (info.supports_extension, "Extension Protocol"),
+-                    (info.supports_fast, "Fast"),
+-                ]
+-                .into_iter()
+-                .filter_map(|(supported, name)| supported.then_some(name))
+-                .collect();
+-                details.app_rows(&[
+-                    ("Type", Some(info.protocol_type.to_string())),
+-                    ("Client", info.client.clone()),
+-                    ("Info Hash", info.info_hash.clone()),
+-                    ("DHT Method", info.dht_method.clone()),
+-                    (
+-                        "Extensions",
+-                        (!extensions.is_empty()).then(|| extensions.join(", ")),
+-                    ),
+-                ]);
+-            }
+-            crate::network::types::ApplicationProtocol::Stun(info) => {
+-                details.app_rows(&[
+-                    ("Method", Some(info.method.to_string())),
+-                    ("Class", Some(info.message_class.to_string())),
+-                    (
+-                        "Transaction ID",
+-                        Some(crate::network::util::hex_encode(&info.transaction_id, "")),
+-                    ),
+-                    ("Software", info.software.clone()),
+-                ]);
+-            }
+-            crate::network::types::ApplicationProtocol::MySql(info) => {
+-                details.app_rows(&[
+-                    ("Server Version", info.server_version.clone()),
+-                    ("Connection ID", info.connection_id.map(|id| id.to_string())),
+-                    (
+-                        "TLS Advertised",
+-                        info.tls_supported
+-                            .map(|yes| if yes { "Yes" } else { "No" }.to_string()),
+-                    ),
+-                    (
+-                        "TLS Request",
+-                        info.tls_requested.then(|| "Observed".to_string()),
+-                    ),
+-                    (
+-                        "SNI",
+-                        info.tls_info.as_ref().and_then(|tls| tls.sni.clone()),
+-                    ),
+-                    (
+-                        "TLS Version",
+-                        info.tls_info
+-                            .as_ref()
+-                            .and_then(|tls| tls.version.map(|v| v.to_string())),
+-                    ),
+-                ]);
+-            }
+-            crate::network::types::ApplicationProtocol::Redis(info) => {
+-                details.app_rows(&[
+-                    ("Command", Some(info.command.clone())),
+-                    (
+-                        "Requested RESP",
+-                        info.requested_version.map(|v| v.to_string()),
+-                    ),
+-                    (
+-                        "Requested DB",
+-                        info.requested_database.map(|db| db.to_string()),
+-                    ),
+-                ]);
+-            }
+-            crate::network::types::ApplicationProtocol::PostgreSql(info) => {
+-                details.app_rows(&[
+-                    (
+-                        "Startup Version",
+-                        info.protocol_minor.map(|v| format!("3.{v}")),
+-                    ),
+-                    ("Database", info.database.clone()),
+-                    ("Client App", info.application_name.clone()),
+-                    (
+-                        "TLS Request",
+-                        info.tls_requested.then(|| "Observed".to_string()),
+-                    ),
+-                    (
+-                        "SNI",
+-                        info.tls_info.as_ref().and_then(|tls| tls.sni.clone()),
+-                    ),
+-                    (
+-                        "TLS Version",
+-                        info.tls_info
+-                            .as_ref()
+-                            .and_then(|tls| tls.version.map(|v| v.to_string())),
+-                    ),
+-                ]);
+-            }
+-            crate::network::types::ApplicationProtocol::Ftp(info) => {
+-                // Code and message describe one server reply; a merged row
+-                // keeps the seven-row FTP card inside the shared budget.
+-                let response = match (info.response_code, &info.response_message) {
+-                    (Some(code), Some(message)) => Some(format!("{} {}", code, message)),
+-                    (Some(code), None) => Some(code.to_string()),
+-                    (None, Some(message)) => Some(message.clone()),
+-                    (None, None) => None,
+-                };
+-                details.app_rows(&[
+-                    ("Message Type", Some(info.message_type.to_string())),
+-                    ("Command", info.command.clone()),
+-                    ("Arguments", info.args.clone()),
+-                    ("Response", response),
+-                    ("Username", info.username.clone()),
+-                    ("Server Software", info.server_software.clone()),
+-                    ("System Type", info.system_type.clone()),
+-                ]);
+-            }
+-            crate::network::types::ApplicationProtocol::Mqtt(info) => {
+-                details.app_rows(&[
+-                    ("Packet Type", Some(info.packet_type.to_string())),
+-                    ("Version", info.version.map(|v| v.to_string())),
+-                    ("Client ID", info.client_id.clone()),
+-                    ("Topic", info.topic.clone()),
+-                    ("QoS", info.qos.map(|q| q.to_string())),
+-                ]);
+-            }
+-            crate::network::types::ApplicationProtocol::WireGuard(info) => {
+-                details.app_rows(&[("Packet Type", Some(info.packet_type.to_string()))]);
+-            }
+-            crate::network::types::ApplicationProtocol::OpenVpn(info) => {
+-                details.app_rows(&[
+-                    ("Packet Type", Some(info.packet_type.to_string())),
+-                    ("Key ID", Some(info.key_id.to_string())),
+-                ]);
+-            }
+-        }
+-    } else if let ProtocolState::Arp(arp_info) = &conn.protocol_state {
+-        details.section_styled("Application: ARP", theme::bold_fg(non_dpi_app_color()));
+-        let operation = match arp_info.operation {
+-            crate::network::types::ArpOperation::Request => "Request",
+-            crate::network::types::ArpOperation::Reply => "Reply",
++    } else {
++        let title = match &conn.protocol_state {
++            ProtocolState::Arp(_) => "Application: ARP",
++            ProtocolState::Icmp { .. } if conn.local_addr.is_ipv6() => "Application: ICMPv6",
++            ProtocolState::Icmp { .. } => "Application: ICMP",
++            ProtocolState::Igmp { .. } => "Application: IGMP",
++            _ => "Application",
+         };
+-        details.app_rows(&[
+-            ("Operation", Some(operation.to_string())),
+-            ("Sender MAC", Some(arp_info.sender_mac.clone())),
+-            ("Sender Vendor", arp_info.sender_vendor.clone()),
+-            ("Sender IP", Some(arp_info.sender_ip.to_string())),
+-            ("Target MAC", Some(arp_info.target_mac.clone())),
+-            ("Target Vendor", arp_info.target_vendor.clone()),
+-            ("Target IP", Some(arp_info.target_ip.to_string())),
+-        ]);
+-    } else if let ProtocolState::Icmp {
+-        icmp_type,
+-        icmp_id,
+-        icmp_sequence,
+-        ndp_neighbor,
+-    } = &conn.protocol_state
+-    {
+-        let is_ipv6 = conn.local_addr.is_ipv6();
+-        details.section_styled(
+-            if is_ipv6 {
+-                "Application: ICMPv6"
++        details.section_styled(title, theme::bold_fg(non_dpi_app_color()));
++    }
++    for field in crate::connection_details::application_fields(conn) {
++        if field.label == "Cipher Suite" && field.value.is_some() {
++            let color = if field.warning {
++                theme::warn()
+             } else {
+-                "Application: ICMP"
+-            },
+-            theme::bold_fg(non_dpi_app_color()),
+-        );
+-        // "ip at mac (vendor)" mirrors what the ARP card spells out over
+-        // separate rows: NDP messages carry a single IP-to-MAC mapping.
+-        let neighbor = ndp_neighbor.as_ref().map(|n| match &n.vendor {
+-            Some(vendor) => format!("{} at {} ({})", n.ip, n.mac, vendor),
+-            None => format!("{} at {}", n.ip, n.mac),
+-        });
+-        details.app_rows(&[
+-            (
+-                "Message",
+-                Some(crate::network::types::icmp_message_name(*icmp_type, is_ipv6).into_owned()),
+-            ),
+-            ("Echo ID", icmp_id.map(|id| id.to_string())),
+-            ("Sequence", icmp_sequence.map(|seq| seq.to_string())),
+-            ("NDP Neighbor", neighbor),
+-        ]);
+-    } else if let ProtocolState::Igmp {
+-        igmp_type,
+-        group_addr,
+-    } = &conn.protocol_state
+-    {
+-        details.section_styled("Application: IGMP", theme::bold_fg(non_dpi_app_color()));
+-        details.app_rows(&[
+-            (
+-                "Message",
+-                Some(crate::network::types::igmp_message_name(*igmp_type).into_owned()),
+-            ),
+-            ("Group Address", group_addr.map(|addr| addr.to_string())),
+-        ]);
+-    } else {
+-        details.section("Application");
+-        details.field("Detected", NONE_PLACEHOLDER.to_string());
++                theme::ok()
++            };
++            details.field_styled_opt(field.label, field.value, theme::fg(color));
++        } else {
++            details.app_rows(&[(field.label, field.value)]);
++        }
+     }
+ 
+     // Keep attribution at the same position across application protocols.
+@@ -2331,10 +1824,7 @@ mod header_band_tests {
+ 
+ #[cfg(test)]
+ mod path_shortening_tests {
+-    use super::{
+-        fit_path_middle, format_user_group, process_tree_value, shorten_executable_path,
+-        user_group_label,
+-    };
++    use super::{fit_path_middle, process_tree_value, shorten_executable_path};
+     use crate::network::types::{ProcessAncestor, ProcessLineage};
+     use std::path::{Path, PathBuf};
+ 
+@@ -2448,87 +1938,6 @@ mod path_shortening_tests {
+         assert_eq!(shortened, "…reUpdater");
+         assert_eq!(shortened.chars().count(), 10);
+     }
+-
+-    #[test]
+-    fn unknown_account_ids_fall_back_to_numbers() {
+-        assert_eq!(
+-            user_group_label(u32::MAX, Some(u32::MAX), None, None),
+-            "4294967295:4294967295"
+-        );
+-    }
+-
+-    #[cfg(unix)]
+-    #[test]
+-    fn current_account_ids_resolve_to_names() {
+-        // SAFETY: these calls only read this process's effective credentials.
+-        let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+-        let user = super::resolve_user_name(uid).expect("current user must resolve");
+-        let group = super::resolve_group_name(gid).expect("current group must resolve");
+-
+-        assert_eq!(format_user_group(uid, Some(gid)), format!("{user}:{group}"));
+-    }
+-
+-    #[cfg(all(target_os = "linux", feature = "landlock"))]
+-    #[test]
+-    fn current_account_ids_resolve_with_landlock_enforced() {
+-        use rustnet_sandbox::{SandboxConfig, SandboxMode, apply_sandbox};
+-
+-        let result = apply_sandbox(&SandboxConfig {
+-            mode: SandboxMode::BestEffort,
+-            block_network: false,
+-            read_paths: vec![],
+-            drop_uid: None,
+-        })
+-        .expect("best-effort sandbox must apply without error");
+-        if !result.fs_restricted {
+-            return;
+-        }
+-
+-        // SAFETY: these calls only read this process's effective credentials.
+-        let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+-        assert!(
+-            super::resolve_user_name(uid).is_some(),
+-            "current user must resolve inside the sandbox"
+-        );
+-        assert!(
+-            super::resolve_group_name(gid).is_some(),
+-            "current group must resolve inside the sandbox"
+-        );
+-    }
+-
+-    #[cfg(unix)]
+-    #[test]
+-    fn account_name_must_be_terminated_inside_the_supplied_buffer() {
+-        let buffer = [
+-            b'x' as libc::c_char,
+-            b'm' as libc::c_char,
+-            b'a' as libc::c_char,
+-            b'r' as libc::c_char,
+-            b'c' as libc::c_char,
+-            b'o' as libc::c_char,
+-            0,
+-        ];
+-        assert_eq!(
+-            super::account_name_from_buffer(buffer[1..].as_ptr(), &buffer).as_deref(),
+-            Some("marco")
+-        );
+-
+-        let external = [b'x' as libc::c_char, 0];
+-        assert_eq!(
+-            super::account_name_from_buffer(external.as_ptr(), &buffer),
+-            None
+-        );
+-        assert_eq!(
+-            super::account_name_from_buffer(std::ptr::null(), &buffer),
+-            None
+-        );
+-
+-        let unterminated = [b'n' as libc::c_char, b'o' as libc::c_char];
+-        assert_eq!(
+-            super::account_name_from_buffer(unterminated.as_ptr(), &unterminated),
+-            None
+-        );
+-    }
+ }
+ 
+ #[cfg(test)]
+diff --git a/tests/non_tty_startup.rs b/tests/non_tty_startup.rs
+index 9ee72da..f3b646f 100644
+--- a/tests/non_tty_startup.rs
++++ b/tests/non_tty_startup.rs
+@@ -237,3 +237,34 @@ fn version_remains_available_without_a_terminal() {
+         "unexpected stdout: {stdout}"
+     );
+ }
++
++#[test]
++fn controller_pipe_option_requires_headless_mode() {
++    let output = Command::new(env!("CARGO_BIN_EXE_rustnet"))
++        .arg("--stop-on-stdin-close")
++        .stdin(Stdio::null())
++        .output()
++        .unwrap();
++    assert!(!output.status.success());
++    assert!(String::from_utf8_lossy(&output.stderr).contains("--headless"));
++}
++
++#[cfg(not(target_os = "windows"))]
++#[test]
++fn interface_inventory_is_json_without_a_terminal_or_capture_privileges() {
++    let output = Command::new(env!("CARGO_BIN_EXE_rustnet"))
++        .arg("--list-interfaces")
++        .stdin(Stdio::null())
++        .output()
++        .unwrap();
++    assert!(
++        output.status.success(),
++        "{}",
++        String::from_utf8_lossy(&output.stderr)
++    );
++    let interfaces: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
++    for interface in interfaces.as_array().unwrap() {
++        assert!(interface["name"].is_string());
++        assert!(interface["addresses"].is_array());
++    }
++}
