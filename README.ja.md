@@ -8,12 +8,12 @@ Tauri 2 を使った RustNet のデスクトップフロントエンドです。
 
 ## 開発
 
-Rust、Node.js 22.12+（または新しいサポート対象 LTS）、既存の RustNet ビルド依存関係、
+Rust、Node.js 22.13+（または新しいサポート対象 LTS）、既存の RustNet ビルド依存関係、
 [Tauri のデスクトップ要件](https://v2.tauri.app/start/prerequisites/)を用意してください。
 Linux は WebKitGTK 4.1 と GTK 3 の開発パッケージ、Windows は MSVC、WebView2、
 Npcap が必要です。対象プラットフォーム上でビルドします。
-[pnpm](https://pnpm.io/installation) 11.25.0（`package.json` で固定）をインストールしてください。
-例: `npm install --global pnpm@11.25.0`。このディレクトリで実行します。
+[pnpm](https://pnpm.io/installation) 12.12.0（`package.json` で固定）をインストールしてください。
+例: `npm install --global pnpm@12.12.0`。このディレクトリで実行します。
 
 ```sh
 pnpm install --frozen-lockfile
