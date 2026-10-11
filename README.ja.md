@@ -225,3 +225,15 @@ pnpm run bundle
 現在の Tauri の Linux 依存関係には、メンテナンス終了 crate と GLib
 `VariantStrIter` の健全性問題（RUSTSEC-2024-0429）に関する RustSec 警告があります。
 デスクトップの検証では警告を抑制しません。本番リリース前に上流の修正状況を確認してください。
+
+## 依存関係の更新
+
+Renovate は pnpm パッケージと固定された pnpm バージョン、Rust の依存関係、GitHub
+Actions を管理します。通常のフロントエンド、Rust、Tauri、Actions 更新はグループ化し、
+メジャー更新は個別に扱います。ロックファイルは毎週月曜日の 06:00 前
+（Europe/Zurich）に更新します。レビューが必要で、自動マージは行いません。
+
+Renovate GitHub App にこの非公開リポジトリへのアクセスを許可してください。
+[GitHub のインストール済みアプリ](https://github.com/settings/installations) で設定できます。
+処理後は Dependency Dashboard に更新候補が表示されます。
+`engine.lock.json` と一時的なエンジンパッチは一緒に手動で管理します。
