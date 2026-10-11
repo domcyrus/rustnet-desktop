@@ -247,15 +247,3 @@ The current Tauri Linux dependency tree reports upstream RustSec warnings for
 unmaintained crates and GLib `VariantStrIter` soundness (RUSTSEC-2024-0429).
 These warnings are not suppressed in the desktop checks. Review upstream fixes
 before distributing a production release.
-
-## Dependency updates
-
-Renovate manages pnpm packages and its pinned version, Rust dependencies, and GitHub
-Actions. Routine frontend, Rust, Tauri, and Actions updates are grouped; major
-upgrades remain separate. Lockfiles are refreshed on Mondays before 06:00
-(Europe/Zurich). Updates require review and are never merged automatically.
-
-The Renovate GitHub App needs access to this private repository. Enable it in
-[GitHub's installed applications](https://github.com/settings/installations).
-Its Dependency Dashboard lists pending updates once the app has processed the repo.
-`engine.lock.json` and the temporary engine patches are maintained manually together.
