@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { Activity } from "lucide-react";
+import { Metric } from "./components";
 import { Chart } from "./Chart";
 import {
   bytes,
@@ -7,17 +8,14 @@ import {
   type Application,
   type CaptureHistory,
   type Snapshot,
-  type TrafficPoint,
 } from "./model";
 
 export function AllTraffic({
   snapshot,
-  points,
   apps,
   history,
 }: {
   snapshot: Snapshot | null | undefined;
-  points: TrafficPoint[];
   apps: Application[];
   history: CaptureHistory;
 }) {
@@ -95,19 +93,15 @@ export function AllTraffic({
             "Tracked frame bytes · session",
           ],
         ].map(([label, value, caption]) => (
-          <div className="metric" key={label}>
-            <div className="metric-label">{label}</div>
-            <strong
-              className={
-                value === "Waiting for samples" || value === "Unavailable"
-                  ? "metric-placeholder"
-                  : undefined
-              }
-            >
-              {value}
-            </strong>
-            <small>{caption}</small>
-          </div>
+          <Metric
+            key={label}
+            label={label}
+            value={value}
+            caption={caption}
+            placeholder={
+              value === "Waiting for samples" || value === "Unavailable"
+            }
+          />
         ))}
       </div>
       {totals && (
@@ -126,7 +120,7 @@ export function AllTraffic({
         </div>
       )}
       <Chart
-        points={totals ? traffic : points}
+        points={totals ? traffic : history.traffic}
         label="Tracked traffic · last 60 seconds"
       />
       {totals && coverage ? (

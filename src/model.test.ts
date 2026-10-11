@@ -127,9 +127,13 @@ describe("application and connection views", () => {
     });
     const key = applications([missing])[0].key;
     expect(applications([known])[0].key).toBe(key);
-    let history = updateApplicationHistory(new Map(), [missing], 1000);
-    history = updateApplicationHistory(history, [known], 2000);
-    history = updateApplicationHistory(history, [missing], 3000);
+    let history = updateApplicationHistory(
+      new Map(),
+      applications([missing]),
+      1000,
+    );
+    history = updateApplicationHistory(history, applications([known]), 2000);
+    history = updateApplicationHistory(history, applications([missing]), 3000);
     expect(history.size).toBe(1);
     expect(history.get(key)?.map((p) => p.time)).toEqual([1000, 2000, 3000]);
   });
@@ -251,15 +255,19 @@ it("bounds history and ignores repeated polls of the same snapshot", () => {
 it("retains bounded history for every application before selection", () => {
   const rows = viewFixture().snapshot!.connections;
   const groups = applications(rows);
-  const first = updateApplicationHistory(new Map(), rows, 0);
-  const next = updateApplicationHistory(first, rows, 30_000);
+  const first = updateApplicationHistory(new Map(), applications(rows), 0);
+  const next = updateApplicationHistory(first, applications(rows), 30_000);
   for (const app of groups) {
     expect(next.get(app.key)?.map((point) => point.time)).toEqual([0, 30_000]);
     expect(first.get(app.key)).toHaveLength(1);
   }
-  const duplicate = updateApplicationHistory(next, rows, 30_000);
+  const duplicate = updateApplicationHistory(next, applications(rows), 30_000);
   expect(duplicate.get(groups[0].key)).toHaveLength(2);
-  const expired = updateApplicationHistory(next, [rows[0]], 90_001);
+  const expired = updateApplicationHistory(
+    next,
+    applications([rows[0]]),
+    90_001,
+  );
   expect(expired.size).toBe(1);
   expect(expired.get(groups[0].key)?.map((point) => point.time)).toEqual([
     90_001,
@@ -296,6 +304,11 @@ it("rejects invalid lifecycle timing but accepts older snapshots without it", ()
 });
 
 describe("capture coverage", () => {
+  // Desktop traffic uses connection counters, independently of frame coverage.
+  const desktopRates = (time: number) => ({
+    smoothed: { time, rx: 7, tx: 3 },
+    raw: { time, rx: 9, tx: 5 },
+  });
   it("smooths batched counters over two seconds while retaining raw peaks and a full minute of samples", () => {
     const makeTotals = (n: number) => ({
       captured: n,
@@ -309,22 +322,55 @@ describe("capture coverage", () => {
       1,
       0,
       makeTotals(0),
+      desktopRates(0),
     );
     for (let time = 500; time <= 2000; time += 500)
-      history = updateCaptureHistory(history, 1, time, makeTotals(0));
-    history = updateCaptureHistory(history, 1, 2500, makeTotals(1000));
-    expect(history.traffic.at(-1)?.rx).toBe(500);
-    expect(history.rawTraffic?.at(-1)?.rx).toBe(2000);
-    expect(updateCaptureHistory(history, 1, 2510, makeTotals(1100))).toBe(
+      history = updateCaptureHistory(
+        history,
+        1,
+        time,
+        makeTotals(0),
+        desktopRates(time),
+      );
+    history = updateCaptureHistory(
       history,
+      1,
+      2500,
+      makeTotals(1000),
+      desktopRates(2500),
     );
-    history = updateCaptureHistory(history, 1, 3000, makeTotals(1100));
-    expect(history.rawTraffic?.at(-1)?.rx).toBe(200);
+    expect(history.coverage.at(-1)?.rx).toBe(500);
+    expect(history.rawCoverage?.at(-1)?.rx).toBe(2000);
+    expect(
+      updateCaptureHistory(
+        history,
+        1,
+        2510,
+        makeTotals(1100),
+        desktopRates(2510),
+      ),
+    ).toBe(history);
+    history = updateCaptureHistory(
+      history,
+      1,
+      3000,
+      makeTotals(1100),
+      desktopRates(3000),
+    );
+    expect(history.rawCoverage?.at(-1)?.rx).toBe(200);
     for (let time = 3500; time <= 65000; time += 500)
-      history = updateCaptureHistory(history, 1, time, makeTotals(1100));
+      history = updateCaptureHistory(
+        history,
+        1,
+        time,
+        makeTotals(1100),
+        desktopRates(time),
+      );
     expect(history.traffic).toHaveLength(121);
     expect(history.traffic[0].time).toBe(5000);
-    expect(history.traffic.at(-1)?.rx).toBe(0);
+    expect(history.coverage.at(-1)?.rx).toBe(0);
+    expect(history.traffic.at(-1)?.rx).toBe(7);
+    expect(history.rawTraffic?.at(-1)?.rx).toBe(9);
   });
   const totals = {
     captured: 1000,
@@ -353,19 +399,35 @@ describe("capture coverage", () => {
       1,
       1000,
       totals,
+      desktopRates(1000),
     );
-    expect(first.traffic).toEqual([]);
-    const next = updateCaptureHistory(first, 1, 3000, {
-      ...totals,
-      captured: 2000,
-      tracked_received: 900,
-      attributed_received: 600,
-    });
-    expect(next.traffic[0]).toEqual({ time: 3000, rx: 200, tx: 0 });
+    expect(first.coverage).toEqual([]);
+    const next = updateCaptureHistory(
+      first,
+      1,
+      3000,
+      {
+        ...totals,
+        captured: 2000,
+        tracked_received: 900,
+        attributed_received: 600,
+      },
+      desktopRates(3000),
+    );
+    expect(next.traffic.at(-1)).toEqual({ time: 3000, rx: 7, tx: 3 });
     expect(next.coverage[0]).toEqual({ time: 3000, rx: 500, tx: 150 });
-    expect(updateCaptureHistory(next, 1, 3000, totals)).toBe(next);
-    expect(updateCaptureHistory(next, 2, 4000, totals).traffic).toEqual([]);
-    expect(updateCaptureHistory(next, 1, 4000, totals).traffic).toEqual([]);
-    expect(updateCaptureHistory(next, 1, 5000, undefined).coverage).toEqual([]);
+    expect(
+      updateCaptureHistory(next, 1, 3000, totals, desktopRates(3000)),
+    ).toBe(next);
+    expect(
+      updateCaptureHistory(next, 2, 4000, totals, desktopRates(4000)).coverage,
+    ).toEqual([]);
+    expect(
+      updateCaptureHistory(next, 1, 4000, totals, desktopRates(4000)).coverage,
+    ).toEqual([]);
+    expect(
+      updateCaptureHistory(next, 1, 5000, undefined, desktopRates(5000))
+        .coverage,
+    ).toEqual([]);
   });
 });
