@@ -5,7 +5,7 @@
   "patches": [
     {
       "file": "engine/patches/0001-desktop-integration.patch",
-      "sha256": "86220cced281ddbb5e1e2102c26385ff1060645c26d198de44ae921ac3e61b30"
+      "sha256": "b095fe91acd600a07bf3a516c5a794ec91155e24d41ef8e1e1d2f9e5e373395c"
     }
   ]
 }

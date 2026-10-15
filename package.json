@@ -12,7 +12,8 @@
     "prepare:engine": "node scripts/prepare-engine.mjs",
     "bundle": "tauri build",
     "desktop:linux-compat": "env WEBKIT_DISABLE_DMABUF_RENDERER=1 tauri dev",
-    "test:engine-source": "node --test scripts/engine-source.check.mjs"
+    "test:engine-source": "node --test scripts/engine-source.check.mjs",
+    "check:engine": "node scripts/check-engine.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "~2.11.0",

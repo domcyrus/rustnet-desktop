@@ -38,6 +38,13 @@ pnpm run desktop
 使用し、追加フィールドを許容します。エンジン更新時は下記のフロントエンドと Rust
 ブリッジのテストを実行します。パッチは一時的な統合手段で、別のエンジン実装ではありません。
 
+デスクトップは `--headless-details full` と `--capture-accounting` を明示的に有効にします。
+通常のヘッドレス実行は上流の schema を維持し、追加の詳細フィールド生成とカバレッジ集計を省略します。
+カバレッジは既存の累積キャプチャバイト数を再利用し、追跡済みおよびプロセス帰属済みの
+フレームバイト合計を処理バッチごとに公開します。帰属はパケット処理時の情報に基づき、
+後から判明したプロセスで過去の合計を変更しません。debug の代替エンジンも両オプションを
+サポートする必要があります。更新後は古い同梱エンジンを再ビルドしてください。
+
 ローカル開発では、`pnpm run desktop` の前に `RUSTNET_ENGINE_SOURCE` を上記変更を含む
 RustNet のチェックアウトに設定してください。スクリプトはビルドだけを行い、パッチ適用や
 Git 状態の変更は行いません。`RUSTNET_DESKTOP_ENGINE` で既存の互換バイナリを指定すると
@@ -210,6 +217,7 @@ pnpm run prepare:engine
 pnpm run build
 pnpm test
 pnpm run test:engine-source
+pnpm run check:engine
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --locked --manifest-path src-tauri/Cargo.toml
