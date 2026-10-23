@@ -8,7 +8,7 @@ Tauri 2 を使った RustNet のデスクトップフロントエンドです。
 
 ## 開発
 
-Rust、Node.js 22.13+（または新しいサポート対象 LTS）、既存の RustNet ビルド依存関係、
+Rust、Node.js 22.22.2+ または 24.15.0+ LTS、既存の RustNet ビルド依存関係、
 [Tauri のデスクトップ要件](https://v2.tauri.app/start/prerequisites/)を用意してください。
 Linux は WebKitGTK 4.1 と GTK 3 の開発パッケージ、Windows は MSVC、WebView2、
 Npcap が必要です。対象プラットフォーム上でビルドします。
@@ -37,6 +37,13 @@ pnpm run desktop
 チェックサムがあり、変更時はロックファイルも更新します。デスクトップは schema 1 を
 使用し、追加フィールドを許容します。エンジン更新時は下記のフロントエンドと Rust
 ブリッジのテストを実行します。パッチは一時的な統合手段で、別のエンジン実装ではありません。
+
+デスクトップは `--headless-details full` と `--capture-accounting` を明示的に有効にします。
+通常のヘッドレス実行は上流の schema を維持し、追加の詳細フィールド生成とカバレッジ集計を省略します。
+カバレッジは既存の累積キャプチャバイト数を再利用し、追跡済みおよびプロセス帰属済みの
+フレームバイト合計を処理バッチごとに公開します。帰属はパケット処理時の情報に基づき、
+後から判明したプロセスで過去の合計を変更しません。debug の代替エンジンも両オプションを
+サポートする必要があります。更新後は古い同梱エンジンを再ビルドしてください。
 
 ローカル開発では、`pnpm run desktop` の前に `RUSTNET_ENGINE_SOURCE` を上記変更を含む
 RustNet のチェックアウトに設定してください。スクリプトはビルドだけを行い、パッチ適用や
@@ -210,6 +217,7 @@ pnpm run prepare:engine
 pnpm run build
 pnpm test
 pnpm run test:engine-source
+pnpm run check:engine
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --locked --manifest-path src-tauri/Cargo.toml

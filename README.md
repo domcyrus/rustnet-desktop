@@ -8,7 +8,7 @@ snapshots. No sample traffic is used by the application.
 
 ## Develop
 
-Install Rust, Node.js 22.13+ (or a newer supported LTS), the existing RustNet build
+Install Rust, Node.js 22.22.2+ or 24.15.0+ LTS, the existing RustNet build
 requirements, and [Tauri's desktop prerequisites](https://v2.tauri.app/start/prerequisites/).
 Linux additionally needs WebKitGTK 4.1 and GTK 3 development packages. Windows
 needs the MSVC toolchain, WebView2, and Npcap. Build on the target platform.
@@ -42,6 +42,14 @@ Every patch has a SHA-256 checksum; changing it requires updating the lock file.
 The desktop expects snapshot schema 1 and tolerates additive fields. Engine
 updates must pass frontend validation tests and the Rust bridge tests below.
 The patch is a temporary integration aid, not a second engine implementation.
+
+The desktop explicitly enables `--headless-details full` and
+`--capture-accounting`. Ordinary headless runs keep the upstream schema and
+skip the extra detail construction and accounting. Coverage reuses the lifetime
+captured-byte counter and publishes tracked and attributed frame-byte totals
+once per processor batch. Attribution reflects ownership when a packet is
+processed; later process discovery does not revise past totals. Debug engine
+overrides must support both options. Rebuild older bundled engines after updating.
 
 For local engine development, set `RUSTNET_ENGINE_SOURCE` to your RustNet checkout
 before `pnpm run desktop`. It must include the integration changes above. The
@@ -230,6 +238,7 @@ pnpm run prepare:engine
 pnpm run build
 pnpm test
 pnpm run test:engine-source
+pnpm run check:engine
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --locked --manifest-path src-tauri/Cargo.toml
