@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Changed
+- Rebase the bundled engine patch onto RustNet main at `0144a88`, preserving process lifecycle checks and observed HTTP status details. (#7)
 - Make extended engine metadata and capture accounting opt-in, enable both for the desktop, and publish accounting per worker batch. (#7)
 - Simplify desktop capture state, traffic histories, and shared UI components; remove obsolete styles and unreachable UI. (#5)
 

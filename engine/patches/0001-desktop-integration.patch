@@ -1,8 +1,8 @@
 diff --git a/USAGE.md b/USAGE.md
-index 0dbf2c3..2fb7b96 100644
+index 5c0cc2d..80adf6a 100644
 --- a/USAGE.md
 +++ b/USAGE.md
-@@ -146,6 +146,16 @@ rustnet --headless --duration 60 --output json
+@@ -147,6 +147,16 @@ rustnet --headless --duration 60 --output json
  rustnet --headless --filter 'process:curl app:https'
  ```
  
@@ -20,10 +20,10 @@ index 0dbf2c3..2fb7b96 100644
  
  - **`--headless`**: disables terminal setup and reserves stdout for machine-readable records only. Diagnostics go to stderr or configured log files.
 diff --git a/USAGE.zh-CN.md b/USAGE.zh-CN.md
-index c6ccfc6..feb54ca 100644
+index c870ce1..27e0181 100644
 --- a/USAGE.zh-CN.md
 +++ b/USAGE.zh-CN.md
-@@ -147,6 +147,14 @@ rustnet --headless --filter 'process:curl app:https'
+@@ -148,6 +148,14 @@ rustnet --headless --filter 'process:curl app:https'
  
  无界面模式的参数如下：
  
@@ -39,10 +39,10 @@ index c6ccfc6..feb54ca 100644
  - **`--duration <SECONDS>`**：在指定的正整数秒数后停止。如果省略，监控会持续到收到支持的关闭信号。JSONL 在发现输出管道已关闭时也会停止。无界面模式在 Unix 上支持 SIGINT、SIGTERM 和 SIGHUP，在 Windows 上支持 Ctrl+C 和 Ctrl+Break。
  - **`--output jsonl|json`**：选择输出形式。JSONL 是默认格式，以每行一个 JSON 对象的方式写出带版本号的最新值快照。当输出产生背压时，队列中的旧快照会被最新快照替换；使用方可通过不连续的 `runtime.snapshot_generation` 值检测到跳过的快照。由时长或信号触发关闭后，JSONL 还会写出一条最终终止记录，其中包含终止原因和关闭结果。JSON 会等待监控停止，然后仅写出一条带版本号的最终记录。
 diff --git a/crates/rustnet-core/src/network/tracker.rs b/crates/rustnet-core/src/network/tracker.rs
-index 1f34b31..e530805 100644
+index 742e2d4..1ee1f51 100644
 --- a/crates/rustnet-core/src/network/tracker.rs
 +++ b/crates/rustnet-core/src/network/tracker.rs
-@@ -193,6 +193,8 @@ pub struct IngestOutcome {
+@@ -195,6 +195,8 @@ pub struct IngestOutcome {
      pub key: ConnectionKey,
      /// `true` if this packet created a new connection entry.
      pub created: bool,
@@ -51,7 +51,7 @@ index 1f34b31..e530805 100644
      /// `true` if the packet was dropped because `max_connections` was reached
      /// (the connection did not already exist and was not inserted).
      pub dropped: bool,
-@@ -252,6 +254,7 @@ impl PacketTimings {
+@@ -254,6 +256,7 @@ impl PacketTimings {
          IngestOutcome {
              key,
              created: false,
@@ -59,7 +59,7 @@ index 1f34b31..e530805 100644
              dropped: false,
              ignored_late: false,
              archived: None,
-@@ -497,8 +500,9 @@ impl ConnectionTracker {
+@@ -496,8 +499,9 @@ impl ConnectionTracker {
              let deltas = merge_packet_into_connection(&mut conn, parsed, now);
              apply_timings(&mut conn, &timings);
              apply_observed_protocol_health(&mut conn, parsed);
@@ -70,7 +70,7 @@ index 1f34b31..e530805 100644
          }
  
          if self.is_recent_late_packet(key, parsed, now) {
-@@ -725,7 +729,8 @@ impl ConnectionTracker {
+@@ -752,7 +756,8 @@ impl ConnectionTracker {
  
          let mut created = false;
          let mut deltas = TcpMergeEvents::default();
@@ -80,7 +80,7 @@ index 1f34b31..e530805 100644
              .entry(key)
              .and_modify(|conn| {
                  deltas = merge_packet_into_connection(conn, parsed, now);
-@@ -745,11 +750,13 @@ impl ConnectionTracker {
+@@ -772,11 +777,13 @@ impl ConnectionTracker {
                  }
                  conn
              });
@@ -95,7 +95,7 @@ index 1f34b31..e530805 100644
      }
  
      /// Finish an update after releasing the connection's shard guard. RTT
-@@ -759,6 +766,7 @@ impl ConnectionTracker {
+@@ -786,6 +793,7 @@ impl ConnectionTracker {
          key: ConnectionKey,
          timings: PacketTimings,
          created: bool,
@@ -103,7 +103,7 @@ index 1f34b31..e530805 100644
          deltas: TcpMergeEvents,
      ) -> IngestOutcome {
          // Feed completed data round trips into the aggregate view, so the
-@@ -772,6 +780,7 @@ impl ConnectionTracker {
+@@ -799,6 +807,7 @@ impl ConnectionTracker {
  
          IngestOutcome {
              created,
@@ -111,7 +111,7 @@ index 1f34b31..e530805 100644
              retransmits: deltas.retransmits,
              out_of_order: deltas.out_of_order,
              fast_retransmits: deltas.fast_retransmits,
-@@ -2286,6 +2295,30 @@ mod tests {
+@@ -2542,6 +2551,30 @@ mod tests {
          assert_eq!(conn.packets_sent + conn.packets_received, 4);
      }
  
@@ -143,10 +143,10 @@ index 1f34b31..e530805 100644
      fn max_connections_limit_drops_new_only() {
          let tracker = ConnectionTracker::with_config(TrackerConfig {
 diff --git a/crates/rustnet-host/src/linux/process.rs b/crates/rustnet-host/src/linux/process.rs
-index 11aeb8a..12ea691 100644
+index c8df5fd..c4e18c7 100644
 --- a/crates/rustnet-host/src/linux/process.rs
 +++ b/crates/rustnet-host/src/linux/process.rs
-@@ -271,6 +271,8 @@ struct SnapshotOwner {
+@@ -267,6 +267,8 @@ struct SnapshotOwner {
      pid: u32,
      name: String,
      inode: u64,
@@ -155,7 +155,7 @@ index 11aeb8a..12ea691 100644
      /// Process start time in clock ticks, when it was readable at startup.
      /// `comm` alone cannot survive PID reuse because any process may rename
      /// itself with `prctl(PR_SET_NAME)`; the start time cannot be forged.
-@@ -328,6 +330,7 @@ fn build_startup_snapshot(
+@@ -324,6 +326,7 @@ fn build_startup_snapshot(
                  name: owner.name.clone(),
                  inode,
                  start_ticks: process_start_ticks(owner.pid),
@@ -163,7 +163,7 @@ index 11aeb8a..12ea691 100644
              },
          );
      }
-@@ -570,8 +573,8 @@ impl LinuxProcessLookup {
+@@ -574,8 +577,8 @@ impl LinuxProcessLookup {
          tgid: u32,
          name: String,
          quality: MatchQuality,
@@ -173,7 +173,7 @@ index 11aeb8a..12ea691 100644
          let name = refine_truncated_name(name, executable.as_deref());
          let mut attribution =
              ProcessAttribution::new(tgid, name, quality).with_executable(executable);
-@@ -587,6 +590,33 @@ impl LinuxProcessLookup {
+@@ -591,6 +594,33 @@ impl LinuxProcessLookup {
          }
      }
  
@@ -207,17 +207,17 @@ index 11aeb8a..12ea691 100644
      /// Build the connection map and socket inventory.
      fn build_process_map(
          startup_owners: StartupSocketOwners,
-@@ -745,7 +775,8 @@ impl LinuxProcessLookup {
+@@ -782,7 +812,8 @@ fn matching_socket_inode(
  impl ProcessLookup for LinuxProcessLookup {
      fn get_process_attribution(&self, conn: &Connection) -> Option<ProcessAttribution> {
          let (tgid, name, quality) = self.lookup_match(conn)?;
--        Some(self.build_attribution(tgid, name, quality))
+-        let mut attribution = self.build_attribution(tgid, name, quality);
 +        let executable = self.executable_for(conn, tgid, quality, resolve_executable(tgid));
-+        Some(self.build_attribution(tgid, name, quality, executable))
-     }
- 
-     fn refresh(&self) -> Result<()> {
-@@ -924,6 +955,7 @@ mod tests {
++        let mut attribution = self.build_attribution(tgid, name, quality, executable);
+         // A cached tuple/PID alone cannot establish a process generation.
+         // Verify that this incarnation still owns the observed socket.
+         let before = process_start_ticks(tgid);
+@@ -1052,6 +1083,7 @@ mod tests {
                  name,
                  inode,
                  start_ticks: process_start_ticks(pid),
@@ -225,7 +225,7 @@ index 11aeb8a..12ea691 100644
              },
          );
          LinuxProcessLookup {
-@@ -1103,6 +1135,79 @@ mod tests {
+@@ -1284,6 +1316,79 @@ mod tests {
          assert_eq!(quality, MatchQuality::StartupSnapshot);
      }
  
@@ -305,7 +305,7 @@ index 11aeb8a..12ea691 100644
      #[test]
      fn startup_snapshot_rejects_a_reused_tuple() {
          // The startup socket closed and another (owner-invisible) socket
-@@ -1173,6 +1278,7 @@ mod tests {
+@@ -1354,6 +1459,7 @@ mod tests {
                  name: own_comm(),
                  inode: 777,
                  start_ticks: process_start_ticks(own_pid()).map(|ticks| ticks + 1),
@@ -313,7 +313,7 @@ index 11aeb8a..12ea691 100644
              },
          );
          let lookup = LinuxProcessLookup {
-@@ -1217,6 +1323,7 @@ mod tests {
+@@ -1398,6 +1504,7 @@ mod tests {
                  name: "old-owner".to_string(),
                  inode: 777,
                  start_ticks: None,
@@ -561,10 +561,10 @@ index 0000000..1d93f87
 +    }
 +}
 diff --git a/src/app/capture.rs b/src/app/capture.rs
-index 6d93abb..8202164 100644
+index 5ef8517..0c29428 100644
 --- a/src/app/capture.rs
 +++ b/src/app/capture.rs
-@@ -24,7 +24,7 @@ use super::packet_queue::{CAPTURE_QUEUE_WAIT, send_with_backpressure};
+@@ -26,7 +26,7 @@ use super::packet_queue::{CAPTURE_QUEUE_WAIT, send_with_backpressure};
  use super::pcapng_export::{PcapngRecord, send_pcapng_record};
  use super::runtime::InitStatus;
  use super::state::App;
@@ -573,15 +573,15 @@ index 6d93abb..8202164 100644
  use super::{PACKET_BATCH_QUEUE_CAPACITY, PACKET_BATCH_SIZE, PCAPNG_ATTRIBUTION_WAIT};
  
  #[cfg(target_os = "linux")]
-@@ -879,6 +879,7 @@ impl App {
-         let pcap_sidecar_file = self.pcap_sidecar_file.clone();
+@@ -882,6 +882,7 @@ impl App {
          let dns_resolver = self.dns_resolver.clone();
+         let socket_snapshot = Arc::clone(&self.socket_snapshot);
          let oui_lookup = self.oui_lookup.clone();
 +        let capture_accounting = self.config.capture_accounting;
          let parser_config = ParserConfig {
              enable_dpi: self.config.enable_dpi,
          };
-@@ -973,7 +974,8 @@ impl App {
+@@ -976,7 +977,8 @@ impl App {
                      };
  
                      // Both worker modes share the exact tracker/export path.
@@ -591,7 +591,7 @@ index 6d93abb..8202164 100644
                          |packet: &mut CapturedPacket, parsed: Option<&ParsedPacket>| {
                              let packet_timestamp = packet.timestamp;
                              let key = parsed.and_then(|parsed| {
-@@ -989,6 +991,13 @@ impl App {
+@@ -994,6 +996,13 @@ impl App {
                                  if outcome.dropped || outcome.ignored_late {
                                      None
                                  } else {
@@ -605,7 +605,7 @@ index 6d93abb..8202164 100644
                                      Some(outcome.key)
                                  }
                              });
-@@ -1047,6 +1056,9 @@ impl App {
+@@ -1052,6 +1061,9 @@ impl App {
                      // Ingestion only borrows parsed data. Drop frame and DPI
                      // storage after releasing the ordered commit, retaining
                      // the scratch vector's capacity for the next batch.
@@ -615,7 +615,7 @@ index 6d93abb..8202164 100644
                      parsed_batch.clear();
  
                      total_processed += batch_len as u64;
-@@ -1656,6 +1668,95 @@ mod packet_worker_tests {
+@@ -1675,6 +1687,95 @@ mod packet_worker_tests {
          frame
      }
  
@@ -712,10 +712,10 @@ index 6d93abb..8202164 100644
          let mut frame = udp_frame(0);
          frame.truncate(34);
 diff --git a/src/app/mod.rs b/src/app/mod.rs
-index 381cee2..9d5b9d0 100644
+index 68b64a2..20f64e2 100644
 --- a/src/app/mod.rs
 +++ b/src/app/mod.rs
-@@ -31,7 +31,7 @@ pub use output::{
+@@ -28,7 +28,7 @@ pub use output::{
  pub use runtime::{InitStatus, StopReport, WorkerStartupPermit};
  pub use state::App;
  pub(crate) use types::ConnectionCounts;
@@ -725,7 +725,7 @@ index 381cee2..9d5b9d0 100644
  use std::time::Duration;
  
 diff --git a/src/app/sampling.rs b/src/app/sampling.rs
-index 3625366..57a596d 100644
+index 9bb8a67..c10de61 100644
 --- a/src/app/sampling.rs
 +++ b/src/app/sampling.rs
 @@ -154,14 +154,27 @@ pub(super) fn build_connection_snapshot(
@@ -760,7 +760,7 @@ index 3625366..57a596d 100644
  impl App {
      pub(super) fn start_snapshot_provider(
          &mut self,
-@@ -549,6 +562,54 @@ mod live_rate_sampling_tests {
+@@ -551,6 +564,54 @@ mod live_rate_sampling_tests {
          ApplicationProtocol, ConnectionKey, DnsInfo, DnsQueryType, DpiInfo, Protocol, ProtocolState,
      };
  
@@ -816,10 +816,10 @@ index 3625366..57a596d 100644
      fn activity_and_overview_share_ptr_visibility_for_active_and_historic_dns() {
          for resolve_dns in [false, true] {
 diff --git a/src/app/state.rs b/src/app/state.rs
-index f4b82ba..0f579a1 100644
+index 65431ad..191f792 100644
 --- a/src/app/state.rs
 +++ b/src/app/state.rs
-@@ -314,6 +314,7 @@ impl App {
+@@ -316,6 +316,7 @@ impl App {
          let runtime = RuntimeSupervisor::new();
          let should_stop = runtime.stop_token();
  
@@ -827,7 +827,7 @@ index f4b82ba..0f579a1 100644
          Ok(Self {
              config,
              lifecycle: Mutex::new(AppLifecycle::Created),
-@@ -325,7 +326,7 @@ impl App {
+@@ -327,7 +328,7 @@ impl App {
              show_historic: Arc::new(AtomicBool::new(false)),
              service_lookup: Arc::new(service_lookup),
              oui_lookup,
@@ -836,7 +836,7 @@ index f4b82ba..0f579a1 100644
              is_loading: Arc::new(AtomicBool::new(true)),
              current_interface: Arc::new(RwLock::new(None)),
              linktype: Arc::new(RwLock::new(None)),
-@@ -811,6 +812,12 @@ impl App {
+@@ -844,6 +845,12 @@ impl App {
          self.tracker.ingest_at(parsed, at);
      }
  
@@ -1238,12 +1238,12 @@ index 3fdaa5c..88933df 100644
          for args in [
 diff --git a/src/connection_details.rs b/src/connection_details.rs
 new file mode 100644
-index 0000000..d84da7c
+index 0000000..6f5b872
 --- /dev/null
 +++ b/src/connection_details.rs
-@@ -0,0 +1,412 @@
+@@ -0,0 +1,463 @@
 +//! Shared observed application fields for terminal details and headless consumers.
-+use crate::network::types::{Connection, ProtocolState};
++use crate::network::types::{Connection, HttpInfo, ProtocolState};
 +use serde::Serialize;
 +
 +#[derive(Serialize)]
@@ -1275,7 +1275,7 @@ index 0000000..d84da7c
 +                    ("HTTP Method", info.method.clone()),
 +                    ("HTTP Host", info.host.clone()),
 +                    ("HTTP Path", info.path.clone()),
-+                    ("HTTP Status", info.status_code.map(|s| s.to_string())),
++                    ("HTTP Status", format_http_status(info)),
 +                    ("User-Agent", info.user_agent.clone()),
 +                ]);
 +            }
@@ -1653,6 +1653,57 @@ index 0000000..d84da7c
 +        _ => {}
 +    }
 +    fields.0
++}
++
++/// Preserve the observed token and flag malformed values only in the display.
++fn format_http_status(info: &HttpInfo) -> Option<String> {
++    let Some(token) = info.status_token.as_deref() else {
++        return info.status_code.map(|code| code.to_string());
++    };
++    let valid = token.len() == 3
++        && token.bytes().all(|byte| byte.is_ascii_digit())
++        && token
++            .parse::<u16>()
++            .is_ok_and(|code| (100..=599).contains(&code));
++    Some(if valid {
++        token.to_string()
++    } else {
++        format!("{token} (invalid format)")
++    })
++}
++
++#[cfg(test)]
++mod http_status_tests {
++    use super::format_http_status;
++    use crate::network::types::{HttpInfo, HttpVersion};
++
++    #[test]
++    fn observed_http_status_checks_format_and_range_only_for_display() {
++        let mut info = HttpInfo {
++            version: HttpVersion::Http11,
++            method: None,
++            host: None,
++            path: None,
++            status_code: Some(200),
++            status_token: None,
++            user_agent: None,
++        };
++        for token in ["100", "200", "599"] {
++            info.status_token = Some(token.to_string());
++            assert_eq!(format_http_status(&info).as_deref(), Some(token));
++        }
++        for token in ["+200", "0200", "099", "600", "20", "OK", "２００"] {
++            info.status_token = Some(token.to_string());
++            assert_eq!(
++                format_http_status(&info),
++                Some(format!("{token} (invalid format)"))
++            );
++        }
++        info.status_token = None;
++        assert_eq!(format_http_status(&info).as_deref(), Some("200"));
++        info.status_code = None;
++        assert_eq!(format_http_status(&info), None);
++    }
 +}
 diff --git a/src/headless/mod.rs b/src/headless/mod.rs
 index 8c09c4f..cb658a6 100644
@@ -2183,7 +2234,7 @@ index 6096fed..b92e1f8 100644
  
          assert!(value["filter"].is_null());
 diff --git a/src/headless/tests.rs b/src/headless/tests.rs
-index f45b33c..2d92669 100644
+index 8190bc1..a66e452 100644
 --- a/src/headless/tests.rs
 +++ b/src/headless/tests.rs
 @@ -7,6 +7,7 @@ use serde::{Serialize, Serializer};
@@ -2390,7 +2441,7 @@ index f45b33c..2d92669 100644
              format: HeadlessFormat::JsonLines,
              duration: Some(Duration::from_millis(20)),
              filter_query: None,
-@@ -511,6 +645,8 @@ fn stalled_writer_cannot_block_signal_shutdown() {
+@@ -515,6 +649,8 @@ fn stalled_writer_cannot_block_signal_shutdown() {
          &mut app,
          writer,
          &HeadlessOptions {
@@ -2399,7 +2450,7 @@ index f45b33c..2d92669 100644
              format: HeadlessFormat::JsonLines,
              duration: None,
              filter_query: None,
-@@ -676,6 +812,8 @@ fn capture_failure_stops_an_indefinite_run() {
+@@ -682,6 +818,8 @@ fn capture_failure_stops_an_indefinite_run() {
          &mut app,
          output.clone(),
          &HeadlessOptions {
@@ -2408,7 +2459,7 @@ index f45b33c..2d92669 100644
              format: HeadlessFormat::Json,
              duration: None,
              filter_query: None,
-@@ -707,6 +845,8 @@ fn capture_failure_wins_a_simultaneous_normal_exit() {
+@@ -713,6 +851,8 @@ fn capture_failure_wins_a_simultaneous_normal_exit() {
              &mut app,
              output.clone(),
              &HeadlessOptions {
@@ -2417,7 +2468,7 @@ index f45b33c..2d92669 100644
                  format,
                  duration: Some(Duration::ZERO),
                  filter_query: None,
-@@ -739,6 +879,8 @@ fn unexpected_critical_worker_exit_stops_an_indefinite_run() {
+@@ -745,6 +885,8 @@ fn unexpected_critical_worker_exit_stops_an_indefinite_run() {
          &mut app,
          output.clone(),
          &HeadlessOptions {
@@ -2426,7 +2477,7 @@ index f45b33c..2d92669 100644
              format: HeadlessFormat::Json,
              duration: None,
              filter_query: None,
-@@ -762,6 +904,8 @@ fn shared_shutdown_condition_ends_json_mode() {
+@@ -768,6 +910,8 @@ fn shared_shutdown_condition_ends_json_mode() {
          &mut app,
          output.clone(),
          &HeadlessOptions {
@@ -2436,7 +2487,7 @@ index f45b33c..2d92669 100644
              duration: None,
              filter_query: None,
 diff --git a/src/lib.rs b/src/lib.rs
-index 9668259..bd19866 100644
+index 2fe556a..95bec82 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
 @@ -15,10 +15,12 @@
@@ -2453,10 +2504,10 @@ index 9668259..bd19866 100644
  pub(crate) mod filter;
  pub mod headless;
 diff --git a/src/ui/mod.rs b/src/ui/mod.rs
-index 60fad03..a9abe2b 100644
+index 72033d8..2833428 100644
 --- a/src/ui/mod.rs
 +++ b/src/ui/mod.rs
-@@ -2303,7 +2303,7 @@ mod snapshot_tests {
+@@ -2220,7 +2220,7 @@ mod snapshot_tests {
          assert!(attributed.contains("1900"));
          assert!(attributed.contains("/usr/lib/firefox/firefox"));
          assert!(attributed.contains("systemd > bash > firefox"));
@@ -2466,7 +2517,7 @@ index 60fad03..a9abe2b 100644
      }
  
 diff --git a/src/ui/tabs/details.rs b/src/ui/tabs/details.rs
-index ccd34c8..165df30 100644
+index a044aac..cec7bdb 100644
 --- a/src/ui/tabs/details.rs
 +++ b/src/ui/tabs/details.rs
 @@ -4,6 +4,7 @@
@@ -2492,8 +2543,19 @@ index ccd34c8..165df30 100644
  /// The DPI application payload of `$conn` when it was classified as the
  /// given `ApplicationProtocol` variant.
  macro_rules! app_info {
-@@ -329,146 +322,6 @@ fn request_health_fields(details: &mut DetailsBuilder<'_>, conn: &Connection) {
-     );
+@@ -39,8 +32,8 @@ macro_rules! app_info {
+ 
+ use crate::network::dns::DnsResolver;
+ use crate::network::types::{
+-    AddrKind, Connection, HttpInfo, MatchQuality, ProcessLineage, Protocol, ProtocolState,
+-    TcpAnalytics, WindowSample,
++    AddrKind, Connection, MatchQuality, ProcessLineage, Protocol, ProtocolState, TcpAnalytics,
++    WindowSample,
+ };
+ use crate::ui::{
+     ClickAction, ClickableRegions, Component, ComponentContext, DetailsSection, Effect, GroupedRow,
+@@ -381,146 +374,6 @@ fn network_event_fields(details: &mut DetailsBuilder<'_>, conn: &Connection) {
+     }
  }
  
 -#[cfg(unix)]
@@ -2639,10 +2701,27 @@ index ccd34c8..165df30 100644
  /// Shorten an executable path for a one-row display slot.
  ///
  /// Detail rows are clipped at the pane edge, which for a long path cuts off
-@@ -638,33 +491,6 @@ fn format_quic_close(close: &crate::network::types::QuicCloseInfo) -> String {
+@@ -690,50 +543,6 @@ fn format_quic_close(close: &crate::network::types::QuicCloseInfo) -> String {
      format!("{} 0x{:x}", origin, close.error_code)
  }
  
+-/// Preserve the observed token and flag malformed values only in the display.
+-fn format_http_status(info: &HttpInfo) -> Option<String> {
+-    let Some(token) = info.status_token.as_deref() else {
+-        return info.status_code.map(|code| code.to_string());
+-    };
+-    let valid = token.len() == 3
+-        && token.bytes().all(|byte| byte.is_ascii_digit())
+-        && token
+-            .parse::<u16>()
+-            .is_ok_and(|code| (100..=599).contains(&code));
+-    Some(if valid {
+-        token.to_string()
+-    } else {
+-        format!("{token} (invalid format)")
+-    })
+-}
+-
 -/// Comma-joined display form of a response-IP list, `None` when empty so the
 -/// Application card renders its placeholder instead of `[]`-style debug
 -/// output.
@@ -2673,7 +2752,7 @@ index ccd34c8..165df30 100644
  /// Endpoint address with a broadcast/multicast annotation when the address
  /// is a group or broadcast destination rather than an actual host.
  fn annotated_addr(addr: std::net::SocketAddr, kind: AddrKind) -> String {
-@@ -1361,360 +1187,27 @@ pub(in crate::ui) fn draw_connection_details(
+@@ -1444,360 +1253,27 @@ pub(in crate::ui) fn draw_connection_details(
              format!("Application: {}", dpi.application.sort_key()),
              theme::bold_fg(dpi_color(&dpi.application)),
          );
@@ -2689,7 +2768,7 @@ index ccd34c8..165df30 100644
 -                    ("HTTP Method", info.method.clone()),
 -                    ("HTTP Host", info.host.clone()),
 -                    ("HTTP Path", info.path.clone()),
--                    ("HTTP Status", info.status_code.map(|s| s.to_string())),
+-                    ("HTTP Status", format_http_status(info)),
 -                    ("User-Agent", info.user_agent.clone()),
 -                ]);
 -            }
@@ -3053,7 +3132,7 @@ index ccd34c8..165df30 100644
      }
  
      // Keep attribution at the same position across application protocols.
-@@ -2331,10 +1824,7 @@ mod header_band_tests {
+@@ -2415,10 +1891,7 @@ mod header_band_tests {
  
  #[cfg(test)]
  mod path_shortening_tests {
@@ -3065,7 +3144,7 @@ index ccd34c8..165df30 100644
      use crate::network::types::{ProcessAncestor, ProcessLineage};
      use std::path::{Path, PathBuf};
  
-@@ -2448,87 +1938,6 @@ mod path_shortening_tests {
+@@ -2532,87 +2005,6 @@ mod path_shortening_tests {
          assert_eq!(shortened, "…reUpdater");
          assert_eq!(shortened.chars().count(), 10);
      }
@@ -3153,6 +3232,44 @@ index ccd34c8..165df30 100644
  }
  
  #[cfg(test)]
+@@ -2729,37 +2121,3 @@ mod window_size_tests {
+         assert_eq!(format_window_sizes(Some(&TcpAnalytics::new())), "-");
+     }
+ }
+-
+-#[cfg(test)]
+-mod http_status_tests {
+-    use super::format_http_status;
+-    use crate::network::types::{HttpInfo, HttpVersion};
+-
+-    #[test]
+-    fn observed_http_status_checks_format_and_range_only_for_display() {
+-        let mut info = HttpInfo {
+-            version: HttpVersion::Http11,
+-            method: None,
+-            host: None,
+-            path: None,
+-            status_code: Some(200),
+-            status_token: None,
+-            user_agent: None,
+-        };
+-        for token in ["100", "200", "599"] {
+-            info.status_token = Some(token.to_string());
+-            assert_eq!(format_http_status(&info).as_deref(), Some(token));
+-        }
+-        for token in ["+200", "0200", "099", "600", "20", "OK", "２００"] {
+-            info.status_token = Some(token.to_string());
+-            assert_eq!(
+-                format_http_status(&info),
+-                Some(format!("{token} (invalid format)"))
+-            );
+-        }
+-        info.status_token = None;
+-        assert_eq!(format_http_status(&info).as_deref(), Some("200"));
+-        info.status_code = None;
+-        assert_eq!(format_http_status(&info), None);
+-    }
+-}
 diff --git a/src/ui/test_support.rs b/src/ui/test_support.rs
 index 723f216..4a4cfda 100644
 --- a/src/ui/test_support.rs
