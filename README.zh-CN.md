@@ -34,6 +34,12 @@ RustNet 检出目录，供单独审查。合入上游后，将 `engine.lock.json
 桌面使用快照 schema 1，并允许新增字段。更新引擎时必须通过下方的前端验证和 Rust
 桥接测试。补丁只是临时集成措施，不是另一套引擎实现。
 
+桌面会显式启用 `--headless-details full` 和 `--capture-accounting`。
+普通无界面运行保持上游 schema，并跳过额外的详细字段构建和覆盖统计。
+覆盖统计复用进程运行期间累计的抓包字节计数，每个处理批次发布一次已跟踪和已归属的帧字节总数。
+归属以处理数据包时的进程信息为准；之后发现的进程不会修改历史总数。
+debug 引擎覆盖必须支持这两个选项。更新后请重新构建旧的捆绑引擎。
+
 开发引擎时，在运行 `pnpm run desktop` 前将 `RUSTNET_ENGINE_SOURCE` 设置为包含上述
 改动的 RustNet 检出目录。脚本只构建，不应用补丁或修改其 Git 状态。
 也可以通过 `RUSTNET_DESKTOP_ENGINE` 使用已有的兼容二进制并跳过引擎构建。
@@ -181,6 +187,7 @@ pnpm run prepare:engine
 pnpm run build
 pnpm test
 pnpm run test:engine-source
+pnpm run check:engine
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --locked --manifest-path src-tauri/Cargo.toml

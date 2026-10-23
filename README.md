@@ -43,6 +43,14 @@ The desktop expects snapshot schema 1 and tolerates additive fields. Engine
 updates must pass frontend validation tests and the Rust bridge tests below.
 The patch is a temporary integration aid, not a second engine implementation.
 
+The desktop explicitly enables `--headless-details full` and
+`--capture-accounting`. Ordinary headless runs keep the upstream schema and
+skip the extra detail construction and accounting. Coverage reuses the lifetime
+captured-byte counter and publishes tracked and attributed frame-byte totals
+once per processor batch. Attribution reflects ownership when a packet is
+processed; later process discovery does not revise past totals. Debug engine
+overrides must support both options. Rebuild older bundled engines after updating.
+
 For local engine development, set `RUSTNET_ENGINE_SOURCE` to your RustNet checkout
 before `pnpm run desktop`. It must include the integration changes above. The
 script builds that source without applying patches or modifying its Git state.
@@ -230,6 +238,7 @@ pnpm run prepare:engine
 pnpm run build
 pnpm test
 pnpm run test:engine-source
+pnpm run check:engine
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --locked --manifest-path src-tauri/Cargo.toml
