@@ -8,7 +8,7 @@ snapshots. No sample traffic is used by the application.
 
 ## Develop
 
-Install Rust, Node.js 22.13+ (or a newer supported LTS), the existing RustNet build
+Install Rust, Node.js 22.22.2+ or 24.15.0+ LTS, the existing RustNet build
 requirements, and [Tauri's desktop prerequisites](https://v2.tauri.app/start/prerequisites/).
 Linux additionally needs WebKitGTK 4.1 and GTK 3 development packages. Windows
 needs the MSVC toolchain, WebView2, and Npcap. Build on the target platform.
