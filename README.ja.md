@@ -12,8 +12,8 @@ Rust、Node.js 22.22.2+ または 24.15.0+ LTS、既存の RustNet ビルド依�
 [Tauri のデスクトップ要件](https://v2.tauri.app/start/prerequisites/)を用意してください。
 Linux は WebKitGTK 4.1 と GTK 3 の開発パッケージ、Windows は MSVC、WebView2、
 Npcap が必要です。対象プラットフォーム上でビルドします。
-[pnpm](https://pnpm.io/installation) 12.12.0（`package.json` で固定）をインストールしてください。
-例: `npm install --global pnpm@12.12.0`。このディレクトリで実行します。
+[pnpm](https://pnpm.io/installation) 12.15.0（`package.json` で固定）をインストールしてください。
+例: `npm install --global pnpm@12.15.0 --allow-scripts=pnpm`。このディレクトリで実行します。
 
 ```sh
 pnpm install --frozen-lockfile

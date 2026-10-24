@@ -13,8 +13,8 @@ requirements, and [Tauri's desktop prerequisites](https://v2.tauri.app/start/pre
 Linux additionally needs WebKitGTK 4.1 and GTK 3 development packages. Windows
 needs the MSVC toolchain, WebView2, and Npcap. Build on the target platform.
 
-Install [pnpm](https://pnpm.io/installation) 12.12.0 (pinned in `package.json`).
-For example, `npm install --global pnpm@12.12.0`.
+Install [pnpm](https://pnpm.io/installation) 12.15.0 (pinned in `package.json`).
+For example, `npm install --global pnpm@12.15.0 --allow-scripts=pnpm`.
 
 From this directory:
 
