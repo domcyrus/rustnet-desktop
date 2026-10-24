@@ -50,6 +50,12 @@ impl Default for Engine {
 }
 
 impl Engine {
+    pub fn is_active(&self) -> bool {
+        self.running
+            .as_ref()
+            .is_some_and(|run| !run.task.is_finished())
+    }
+
     pub fn view(&self) -> CaptureView {
         self.view.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
@@ -60,11 +66,7 @@ impl Engine {
         export: Option<PathBuf>,
         geoip_directory: Option<PathBuf>,
     ) -> Result<(), String> {
-        if self
-            .running
-            .as_ref()
-            .is_some_and(|run| !run.task.is_finished())
-        {
+        if self.is_active() {
             return Err("A capture is already active. Stop it before changing interfaces.".into());
         }
         if let Some(previous) = self.running.take() {
@@ -73,41 +75,12 @@ impl Engine {
         if interface.len() > 1024 || interface.contains('\0') {
             return Err("Invalid interface name".into());
         }
-        let mut command = engine_command()?;
-        for (flag, path) in geoip_arguments(geoip_directory.as_deref())? {
-            command.arg(flag).arg(path);
+        if let Some(path) = &export
+            && path.exists()
+        {
+            return Err("Choose a new filename. Existing captures are never overwritten.".into());
         }
-        command.args([
-            "--headless",
-            "--output",
-            "jsonl",
-            "--headless-details",
-            "full",
-            "--capture-accounting",
-            "--stop-on-stdin-close",
-            "--include-historic",
-            "--refresh-interval",
-            "500",
-        ]);
-        if !interface.is_empty() {
-            command.arg("--interface").arg(interface);
-        }
-        if let Some(path) = &export {
-            // Recording destinations are chosen through a native dialog. Do
-            // not truncate an existing capture when starting a new session.
-            if path.exists() {
-                return Err(
-                    "Choose a new filename. Existing captures are never overwritten.".into(),
-                );
-            }
-            command.arg("--pcapng-export").arg(path);
-        }
-        let child = command
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("Cannot start the RustNet capture engine: {e}"))?;
+        let process = launch(interface, export.clone(), geoip_directory).await?;
         let (stop, receive) = oneshot::channel();
         {
             let mut view = self.view.lock().unwrap_or_else(|e| e.into_inner());
@@ -121,7 +94,15 @@ impl Engine {
         let view = self.view.clone();
         self.running = Some(Running {
             stop,
-            task: tokio::spawn(supervise(child, receive, view)),
+            task: tokio::spawn(async move {
+                match process {
+                    CaptureProcess::Local(child) => supervise(child, receive, view).await,
+                    #[cfg(target_os = "macos")]
+                    CaptureProcess::Helper(capture) => {
+                        supervise_helper(*capture, receive, view).await
+                    }
+                }
+            }),
         });
         Ok(())
     }
@@ -135,6 +116,60 @@ impl Engine {
             let _ = run.task.await;
         }
     }
+}
+
+enum CaptureProcess {
+    Local(Child),
+    #[cfg(target_os = "macos")]
+    Helper(Box<crate::macos::Capture>),
+}
+
+async fn launch(
+    interface: String,
+    export: Option<PathBuf>,
+    geoip_directory: Option<PathBuf>,
+) -> Result<CaptureProcess, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let options = (interface.clone(), export.clone(), geoip_directory.clone());
+        let helper = tokio::task::spawn_blocking(move || {
+            crate::macos::start_if_enabled(&options.0, options.1.as_deref(), options.2.as_deref())
+        })
+        .await
+        .map_err(|e| e.to_string())??;
+        if let Some(helper) = helper {
+            return Ok(CaptureProcess::Helper(Box::new(helper)));
+        }
+    }
+    let mut command = engine_command()?;
+    for (flag, path) in geoip_arguments(geoip_directory.as_deref())? {
+        command.arg(flag).arg(path);
+    }
+    command.args([
+        "--headless",
+        "--output",
+        "jsonl",
+        "--headless-details",
+        "full",
+        "--capture-accounting",
+        "--stop-on-stdin-close",
+        "--include-historic",
+        "--refresh-interval",
+        "500",
+    ]);
+    if !interface.is_empty() {
+        command.arg("--interface").arg(interface);
+    }
+    if let Some(path) = &export {
+        command.arg("--pcapng-export").arg(path);
+    }
+    let child = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Cannot start the RustNet capture engine: {e}"))?;
+    Ok(CaptureProcess::Local(child))
 }
 
 impl Drop for Engine {
@@ -387,7 +422,6 @@ async fn supervise(mut child: Child, mut stop: oneshot::Receiver<()>, view: Shar
             String::new()
         }
     };
-    let mut view = view.lock().unwrap_or_else(|e| e.into_inner());
     let error = match result {
         Err(error) => Some(error),
         Ok(status) if !status.success() => Some(if message.is_empty() {
@@ -395,8 +429,14 @@ async fn supervise(mut child: Child, mut stop: oneshot::Receiver<()>, view: Shar
         } else {
             message
         }),
-        Ok(_) => read_error.or_else(|| view.error.clone()),
+        Ok(_) => read_error,
     };
+    finish_capture(&view, error);
+}
+
+fn finish_capture(view: &SharedView, error: Option<String>) {
+    let mut view = view.lock().unwrap_or_else(|e| e.into_inner());
+    let error = error.or_else(|| view.error.clone());
     let terminal_failed = !view
         .snapshot
         .as_ref()
@@ -413,9 +453,121 @@ async fn supervise(mut child: Child, mut stop: oneshot::Receiver<()>, view: Shar
     .into();
 }
 
+#[cfg(target_os = "macos")]
+async fn supervise_helper(
+    mut capture: crate::macos::Capture,
+    mut stop: oneshot::Receiver<()>,
+    view: SharedView,
+) {
+    let output = capture.output.take().expect("helper output configured");
+    let stderr = capture
+        .diagnostics
+        .take()
+        .expect("helper diagnostics configured");
+    let exit = capture.exit.take().expect("helper exit pipe configured");
+    let mut reader = tokio::spawn(read_snapshots(BufReader::new(output), view.clone()));
+    let diagnostics = tokio::spawn(diagnostics(stderr));
+    let mut reader_done = false;
+    let mut error = tokio::select! {
+        _ = &mut stop => None,
+        result = &mut reader => {
+            reader_done = true;
+            result.map_err(|e| e.to_string()).and_then(|r| r).err()
+        }
+    };
+    // Invalidating XPC closes the daemon-owned controller and starts its
+    // independent 15-second termination deadline, including after a UI crash.
+    capture.stop();
+    if !reader_done {
+        match tokio::time::timeout(STOP_TIMEOUT + Duration::from_secs(2), &mut reader).await {
+            Ok(result) => error = result.map_err(|e| e.to_string()).and_then(|r| r).err(),
+            Err(_) => {
+                reader.abort();
+                error = Some(
+                    "Capture helper output did not close. The recording may be incomplete.".into(),
+                );
+            }
+        }
+    }
+    let mut diagnostics = diagnostics;
+    let message = match tokio::time::timeout(Duration::from_secs(2), &mut diagnostics).await {
+        Ok(Ok(message)) => message,
+        _ => {
+            diagnostics.abort();
+            String::new()
+        }
+    };
+    let status = tokio::time::timeout(Duration::from_secs(2), read_limited(exit, 32)).await;
+    if !matches!(status, Ok(Ok(ref bytes)) if bytes == b"0\n") {
+        error = error.or_else(|| {
+            Some(if message.is_empty() {
+                "Privileged capture exited abnormally. The recording may be incomplete.".into()
+            } else {
+                message
+            })
+        });
+    }
+    finish_capture(&view, error);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn helper_supervision_requires_clean_exit_and_a_terminal_snapshot() {
+        fn pipe_fixture(bytes: &[u8]) -> std::fs::File {
+            let path = std::env::temp_dir().join(format!(
+                "rustnet-helper-output-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::write(&path, bytes).unwrap();
+            let file = std::fs::File::open(&path).unwrap();
+            std::fs::remove_file(path).unwrap();
+            file
+        }
+        let stopped = b"{\"schema_version\":1,\"type\":\"snapshot\",\"connections\":[],\"runtime\":{\"status\":\"stopped\"}}\n";
+        for (output, status, expected) in [
+            (stopped.as_slice(), b"0\n".as_slice(), None),
+            (
+                stopped.as_slice(),
+                b"1\n".as_slice(),
+                Some("capture permission denied"),
+            ),
+            (
+                b"".as_slice(),
+                b"0\n".as_slice(),
+                Some("Capture shutdown was incomplete"),
+            ),
+        ] {
+            let capture = crate::macos::Capture::fixture(
+                pipe_fixture(output),
+                pipe_fixture(b"capture permission denied"),
+                pipe_fixture(status),
+            );
+            let view = Arc::new(Mutex::new(CaptureView::default()));
+            let (_sender, receiver) = oneshot::channel();
+            tokio::time::timeout(
+                Duration::from_secs(3),
+                supervise_helper(capture, receiver, view.clone()),
+            )
+            .await
+            .unwrap();
+            let result = view.lock().unwrap();
+            if let Some(message) = expected {
+                assert_eq!(result.status, "error");
+                assert!(result.error.as_deref().unwrap().contains(message));
+            } else {
+                assert_eq!(result.status, "stopped");
+                assert!(result.error.is_none());
+            }
+        }
+    }
 
     #[test]
     fn geoip_overrides_require_a_folder_and_pass_each_available_database() {

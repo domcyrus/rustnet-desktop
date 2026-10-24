@@ -1,0 +1,11 @@
+{
+  "bundle": {
+    "externalBin": ["binaries/rustnet-capture-engine", "binaries/rustnet-capture-helper"],
+    "macOS": {
+      "minimumSystemVersion": "13.0",
+      "files": {
+        "Library/LaunchDaemons/io.github.domcyrus.rustnet.desktop.capture.plist": "macos/io.github.domcyrus.rustnet.desktop.capture.plist"
+      }
+    }
+  }
+}

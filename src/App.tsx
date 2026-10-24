@@ -30,6 +30,7 @@ import { useNavigation } from "./useNavigation";
 import { Select } from "./Select";
 import { Inspector } from "./Inspector";
 import { Help } from "./Help";
+import { MacosHelper } from "./MacosHelper";
 import { AllTraffic } from "./AllTraffic";
 import { ApplicationDetails } from "./ApplicationDetails";
 import { ConnectionTable } from "./ConnectionTable";
@@ -630,7 +631,7 @@ export default function App() {
                 disabled={busy || interfaceLoading}
                 onChange={setInterfaceName}
                 options={[
-                  { value: "", label: "Automatic (one interface)" },
+                  { value: "", label: "Automatic" },
                   ...(interfaces.some((i) => i.name === "any")
                     ? [{ value: "any", label: "All interfaces (any)" }]
                     : []),
@@ -692,6 +693,7 @@ export default function App() {
             >
               <X size={16} />
             </button>
+            <MacosHelper active={active || busy} />
             <div className="geoip-settings">
               <div>
                 <strong>GeoIP databases</strong>

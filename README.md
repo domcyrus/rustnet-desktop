@@ -12,6 +12,7 @@ Install Rust, Node.js 22.22.2+ or 24.15.0+ LTS, the existing RustNet build
 requirements, and [Tauri's desktop prerequisites](https://v2.tauri.app/start/prerequisites/).
 Linux additionally needs WebKitGTK 4.1 and GTK 3 development packages. Windows
 needs the MSVC toolchain, WebView2, and Npcap. Build on the target platform.
+macOS builds require macOS 13+ and Xcode Command Line Tools (`xcode-select --install`).
 
 Install [pnpm](https://pnpm.io/installation) 12.15.0 (pinned in `package.json`).
 For example, `npm install --global pnpm@12.15.0 --allow-scripts=pnpm`.
@@ -94,9 +95,18 @@ the engine's sandbox.
   absolute path to a compatible engine binary. This override is supported
   only by debug builds. Packaged builds use the adjacent bundled engine; granting
   capabilities is a separate installation step, not an automatic installer action.
-- **macOS:** configure BPF access as described in [INSTALL.md](https://github.com/domcyrus/rustnet/blob/main/INSTALL.md).
-  Non-root BPF capture uses the available process attribution fallback. This
-  initial frontend does not install a privileged PKTAP helper.
+- **macOS:** for PKTAP, install a Developer ID signed, notarized build in
+  `/Applications`. Open capture settings, select **Enable capture helper**, then
+  approve RustNet Desktop in **System Settings > General > Login Items & Extensions**.
+  Select **Recheck helper status**, choose **Automatic**, and start capture. The
+  `SMAppService` helper launches the bundled engine as root; the engine drops to
+  your user and applies its strict sandbox after opening capture. The UI stays
+  unprivileged. Explicit interfaces disable PKTAP in the current engine.
+  Stop capture before **Remove capture helper**. Remove and enable it again after
+  an update changes the helper or launch-daemon plist. Development and ad-hoc
+  builds use ordinary BPF capture with `lsof` attribution. Configure BPF access
+  as described in [INSTALL.md](https://github.com/domcyrus/rustnet/blob/main/INSTALL.md);
+  ChmodBPF alone does not grant PKTAP access. Helper approval is separate from BPF permissions.
 - **Windows:** install Npcap with access for your normal user. An installation
   restricted to administrators needs its permissions configured separately.
 - **FreeBSD:** the existing CLI remains supported; desktop support is not provided
@@ -166,7 +176,8 @@ further workarounds. Black areas alone do not establish the exact cause.
   to navigate; Enter selects, Escape cancels, and Tab closes the menu.
 - Capture settings open from the source button beside capture status. Linux defaults
   to **All interfaces (any)** when available and no preference has been saved.
-  **Automatic (one interface)** and explicit interface choices remain available.
+  **Automatic** and explicit interface choices remain available. On macOS,
+  Automatic attempts PKTAP when the capture helper is enabled.
   Existing choices, including Automatic, are preserved. Missing saved interfaces
   require choosing a replacement. During capture, **Apply and restart capture**
   stops the old session cleanly before starting the new one; recording uses a new file.
@@ -217,11 +228,22 @@ further workarounds. Black areas alone do not establish the exact cause.
 ## Process boundary
 
 The desktop launches only its bundled `rustnet-capture-engine` executable using structured
-arguments. `--list-interfaces` returns JSON without opening capture. A capture
+arguments, directly or through the approved macOS helper. `--list-interfaces` returns JSON without opening capture. A capture
 uses `--headless --output jsonl --include-historic --stop-on-stdin-close`. Closing the controller pipe
 requests the CLI's normal shutdown and output flush, including after a desktop
 crash. Closing the window waits for shutdown. A child that fails to stop within
 15 seconds is terminated and the recording is marked potentially incomplete.
+
+The macOS helper and app authenticate XPC messages using Developer ID signing
+requirements with the same Team ID and fixed identifiers. The helper accepts
+only a bounded interface name and already-open recording/GeoIP descriptors,
+never executable paths, shell commands, or arbitrary arguments. It derives the
+engine's drop identity from the authenticated caller, permits one capture per
+user, and stops capture when XPC disconnects. Approved helper launches always
+copy the bundled engine to a private root-owned directory, verify its signature,
+and execute that protected copy; debug engine overrides are rejected. Recording
+files are created exclusively by the regular user. User GeoIP discovery is
+resolved by the app before descriptors cross the privilege boundary.
 
 The bridge retains one latest snapshot, caps individual records at 16 MiB, and
 bounds diagnostic output. The UI polls serially every 500 ms, validates schema 1,
@@ -238,6 +260,7 @@ pnpm run prepare:engine
 pnpm run build
 pnpm test
 pnpm run test:engine-source
+pnpm run test:macos-helper
 pnpm run check:engine
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
@@ -249,7 +272,20 @@ pnpm run bundle
 
 `pnpm run bundle` builds the release CLI and desktop and includes the engine in the
 platform bundle. Production signing/notarization credentials and automated capture
-permission provisioning are not configured. Run the RustNet repository checks from
+permission provisioning for Linux/Windows are not configured. macOS bundles also
+contain the capture helper and its launch-daemon plist. For a deployable PKTAP
+build, set `APPLE_SIGNING_IDENTITY` to your Developer ID Application identity and
+provide Tauri's notarization credentials (`APPLE_ID`, `APPLE_PASSWORD`, and
+`APPLE_TEAM_ID`, or Apple API key credentials) before `pnpm run bundle`.
+See [Tauri's signing and notarization guide](https://v2.tauri.app/distribute/sign/macos/).
+Both sidecars and the app must retain their identifiers and use the same Team ID.
+Unsigned/ad-hoc bundles compile but cannot enable the privileged helper.
+`test:macos-helper` runs unprivileged broker/descriptor tests on macOS and skips
+other platforms; it does not install a daemon. Signed integration validation
+must additionally approve the helper, confirm PKTAP in the snapshot's attribution
+method with Automatic, and check recording flush, UI closure and helper removal.
+If DMG packaging stalls in Finder's layout step, `CI=true pnpm run bundle`
+skips that cosmetic step. Run the RustNet repository checks from
 [CONTRIBUTING.md](https://github.com/domcyrus/rustnet/blob/main/CONTRIBUTING.md) when changing the engine.
 
 The current Tauri Linux dependency tree reports upstream RustSec warnings for

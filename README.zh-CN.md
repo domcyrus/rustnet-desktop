@@ -12,6 +12,7 @@
 WebKitGTK 4.1 和 GTK 3 开发包；Windows 需要 MSVC、WebView2 和 Npcap。
 请在目标平台上构建。安装 [pnpm](https://pnpm.io/installation) 12.15.0
 （版本固定在 `package.json`），例如运行 `npm install --global pnpm@12.15.0 --allow-scripts=pnpm`。
+macOS 构建要求 macOS 13+ 和 Xcode 命令行工具（`xcode-select --install`）。
 在此目录运行：
 
 ```sh
@@ -75,8 +76,16 @@ debug 引擎覆盖必须支持这两个选项。更新后请重新构建旧的�
   复制或重新构建会清除文件 capabilities。开发时可将 `RUSTNET_DESKTOP_ENGINE`
   设置为已配置权限、兼容的引擎绝对路径。此覆盖仅用于 debug 构建。
   打包版本使用相邻的附带引擎；权限配置是独立的安装步骤，不会自动执行。
-- **macOS：** 按照 [INSTALL.md](https://github.com/domcyrus/rustnet/blob/main/INSTALL.md) 配置 BPF 访问权限。非 root 的 BPF
-  抓包使用可用的进程归属回退方案。初版不安装具有特权的 PKTAP 辅助进程。
+- **macOS：** 使用 PKTAP 时，将已通过 Developer ID 签名和公证的应用安装到
+  `/Applications`。打开抓包设置，选择 **Enable capture helper**，然后在
+  **System Settings > General > Login Items & Extensions** 中批准 RustNet Desktop。
+  点击 **Recheck helper status**，选择 **Automatic** 后开始抓包。
+  `SMAppService` 辅助进程以 root 启动内置引擎；引擎打开抓包后降权至当前用户并启用
+  严格沙箱，界面始终以普通用户运行。当前引擎选择指定接口时不使用 PKTAP。
+  停止抓包后可点击 **Remove capture helper**。更新更改辅助程序或 launch-daemon plist 后，
+  请移除并重新启用辅助程序。开发和临时签名构建使用普通 BPF 抓包和 `lsof` 进程归属。
+  按照 [INSTALL.md](https://github.com/domcyrus/rustnet/blob/main/INSTALL.md) 配置 BPF 权限；
+  ChmodBPF 本身不授予 PKTAP 权限，辅助进程批准与 BPF 权限是独立的设置。
 - **Windows：** 安装允许普通用户访问的 Npcap。若安装时限制为管理员访问，需要单独
   配置权限。
 - **FreeBSD：** 现有 CLI 继续受支持；初版 Tauri 桌面应用不提供 FreeBSD 支持。
@@ -129,7 +138,8 @@ pnpm run desktop:linux-compat
 - 下拉菜单跟随外观主题。使用方向键、Home/End 或输入标签前缀导航；Enter 选择，
   Escape 取消，Tab 关闭菜单。
 - 点击抓包状态旁的来源按钮打开抓包设置。Linux 在尚未保存偏好且可用时默认选择
-  **All interfaces (any)**，同时保留 **Automatic (one interface)** 和指定接口选项。
+  **All interfaces (any)**，同时保留 **Automatic** 和指定接口选项。在 macOS 上，
+  启用捕获辅助程序后，Automatic 会尝试使用 PKTAP。
   已保存的选择（包括 Automatic）会保留；已保存接口不可用时需手动选择替代接口。
   抓包期间点击 **Apply and restart capture**，会先正常停止旧会话，再启动新会话；
   录制需要使用新文件。
@@ -169,10 +179,17 @@ pnpm run desktop:linux-compat
 
 ## 进程边界
 
-桌面只通过结构化参数启动附带的 `rustnet-capture-engine`。`--list-interfaces` 返回 JSON，
+桌面只通过结构化参数直接或经已批准的 macOS 辅助程序启动附带的 `rustnet-capture-engine`。`--list-interfaces` 返回 JSON，
 不启动抓包。抓包使用 `--headless --output jsonl --include-historic --stop-on-stdin-close`。
 控制管道关闭时，包括桌面崩溃后，CLI 请求正常关闭并刷新输出。关闭窗口会等待引擎
 停止；15 秒后仍未退出的子进程会被终止，录制结果标记为可能不完整。
+
+macOS 辅助程序与应用通过相同 Team ID 和固定标识符的 Developer ID 签名要求验证 XPC 消息。
+辅助程序只接受长度受限的接口名和已打开的录制/GeoIP 文件描述符，不接受可执行文件路径、
+shell 命令或任意参数。降权身份来自经过认证的调用方，每个用户只允许一次捕获，
+XPC 断开时会停止捕获。特权捕获将内置引擎复制到 root 私有目录，验证签名后执行该受保护副本，
+不允许 debug 引擎覆盖。
+录制文件由普通用户以独占方式创建，用户 GeoIP 自动发现由应用在传递描述符之前完成。
 
 桥接层只保留最新快照，单条记录限制为 16 MiB，诊断输出有上限。界面每 500 ms
 串行轮询并验证 schema 1。Connections 使用连续表格；应用及其目标列表每页显示 75 项。
@@ -187,6 +204,7 @@ pnpm run prepare:engine
 pnpm run build
 pnpm test
 pnpm run test:engine-source
+pnpm run test:macos-helper
 pnpm run check:engine
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
@@ -197,7 +215,18 @@ pnpm run bundle
 ```
 
 `pnpm run bundle` 构建 release CLI 和桌面程序，并将引擎包含在平台安装包中。
-未配置生产签名、公证凭证和自动抓包权限配置。修改引擎时，还需在 RustNet 仓库执行
+未配置生产签名、公证凭证及 Linux/Windows 的自动抓包权限配置。macOS 安装包还包含
+辅助程序和 launch-daemon plist。构建可启用 PKTAP 的版本时，在 `pnpm run bundle` 前
+将 `APPLE_SIGNING_IDENTITY` 设置为 Developer ID Application 身份，并提供 Tauri 公证凭证
+（`APPLE_ID`、`APPLE_PASSWORD` 和 `APPLE_TEAM_ID`，或 Apple API 密钥凭证）。
+具体步骤见 [Tauri 签名与公证指南](https://v2.tauri.app/distribute/sign/macos/)。
+两个附带程序和应用须保留各自标识符，并使用相同 Team ID。
+未签名或临时签名构建可以编译，但不能启用特权辅助程序。
+`test:macos-helper` 在 macOS 上运行普通用户的代理/描述符测试，在其他平台跳过，不安装守护程序。
+签名集成验证还需批准辅助程序，选择 Automatic 并确认快照的归属方式为 PKTAP，
+以及检查录制刷新、界面关闭和辅助程序移除。
+若 DMG 打包停在 Finder 布局步骤，可使用 `CI=true pnpm run bundle` 跳过该外观设置。
+修改引擎时，还需在 RustNet 仓库执行
 [CONTRIBUTING.md](https://github.com/domcyrus/rustnet/blob/main/CONTRIBUTING.md) 中的检查。
 
 当前 Tauri 的 Linux 依赖树会报告上游 RustSec 警告，包括停止维护的 crate 和
