@@ -10,8 +10,8 @@
 安装 Rust、Node.js 22.22.2+ 或 24.15.0+ LTS、现有 RustNet 构建依赖，以及
 [Tauri 桌面依赖](https://v2.tauri.app/start/prerequisites/)。Linux 还需要
 WebKitGTK 4.1 和 GTK 3 开发包；Windows 需要 MSVC、WebView2 和 Npcap。
-请在目标平台上构建。安装 [pnpm](https://pnpm.io/installation) 12.12.0
-（版本固定在 `package.json`），例如运行 `npm install --global pnpm@12.12.0`。
+请在目标平台上构建。安装 [pnpm](https://pnpm.io/installation) 12.15.0
+（版本固定在 `package.json`），例如运行 `npm install --global pnpm@12.15.0 --allow-scripts=pnpm`。
 在此目录运行：
 
 ```sh
