@@ -48,8 +48,8 @@ export function MacosHelper({ active }: { active: boolean }) {
         <strong>macOS process attribution</strong>
         <p>{state?.message}</p>
         <small>
-          The approved helper opens capture with administrator privileges; the
-          desktop stays unprivileged. Choose Automatic for PKTAP. Explicit
+          Capture opens with administrator privileges through the approved helper
+          or sudo development mode; the desktop stays unprivileged. Choose Automatic for PKTAP. Explicit
           interfaces use ordinary capture.
         </small>
         {error && <p role="alert">{error}</p>}

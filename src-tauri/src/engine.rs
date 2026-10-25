@@ -96,7 +96,9 @@ impl Engine {
             stop,
             task: tokio::spawn(async move {
                 match process {
-                    CaptureProcess::Local(child) => supervise(child, receive, view).await,
+                    CaptureProcess::Local(child, sudo) => {
+                        supervise(child, receive, view, sudo).await
+                    }
                     #[cfg(target_os = "macos")]
                     CaptureProcess::Helper(capture) => {
                         supervise_helper(*capture, receive, view).await
@@ -119,9 +121,20 @@ impl Engine {
 }
 
 enum CaptureProcess {
-    Local(Child),
+    Local(Child, bool),
     #[cfg(target_os = "macos")]
     Helper(Box<crate::macos::Capture>),
+}
+
+pub fn sudo_mode() -> bool {
+    #[cfg(all(target_os = "macos", debug_assertions))]
+    {
+        crate::dev_sudo::enabled()
+    }
+    #[cfg(not(all(target_os = "macos", debug_assertions)))]
+    {
+        false
+    }
 }
 
 async fn launch(
@@ -129,8 +142,9 @@ async fn launch(
     export: Option<PathBuf>,
     geoip_directory: Option<PathBuf>,
 ) -> Result<CaptureProcess, String> {
+    let sudo = sudo_mode();
     #[cfg(target_os = "macos")]
-    {
+    if !sudo {
         let options = (interface.clone(), export.clone(), geoip_directory.clone());
         let helper = tokio::task::spawn_blocking(move || {
             crate::macos::start_if_enabled(&options.0, options.1.as_deref(), options.2.as_deref())
@@ -141,8 +155,27 @@ async fn launch(
             return Ok(CaptureProcess::Helper(Box::new(helper)));
         }
     }
-    let mut command = engine_command()?;
-    for (flag, path) in geoip_arguments(geoip_directory.as_deref())? {
+    let mut command = if sudo {
+        #[cfg(all(target_os = "macos", debug_assertions))]
+        {
+            crate::dev_sudo::command(&engine_path()?).await?
+        }
+        #[cfg(not(all(target_os = "macos", debug_assertions)))]
+        {
+            unreachable!("sudo capture is only available in macOS debug builds")
+        }
+    } else {
+        engine_command()?
+    };
+    #[cfg(target_os = "macos")]
+    let databases = if sudo && geoip_directory.is_none() {
+        crate::macos::automatic_geoip()
+    } else {
+        geoip_arguments(geoip_directory.as_deref())?
+    };
+    #[cfg(not(target_os = "macos"))]
+    let databases = geoip_arguments(geoip_directory.as_deref())?;
+    for (flag, path) in databases {
         command.arg(flag).arg(path);
     }
     command.args([
@@ -169,7 +202,7 @@ async fn launch(
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|e| format!("Cannot start the RustNet capture engine: {e}"))?;
-    Ok(CaptureProcess::Local(child))
+    Ok(CaptureProcess::Local(child, sudo))
 }
 
 impl Drop for Engine {
@@ -358,18 +391,34 @@ async fn read_snapshots(
     }
 }
 
-async fn stop_child(child: &mut Child) -> Result<std::process::ExitStatus, String> {
+async fn stop_child(child: &mut Child, sudo: bool) -> Result<std::process::ExitStatus, String> {
     drop(child.stdin.take());
     match tokio::time::timeout(STOP_TIMEOUT, child.wait()).await {
         Ok(result) => result.map_err(|e| e.to_string()),
         Err(_) => {
-            let _ = child.kill().await;
+            terminate_child(child, sudo).await?;
             Err("Capture did not stop within 15 seconds and was terminated. The recording may be incomplete.".into())
         }
     }
 }
 
-async fn supervise(mut child: Child, mut stop: oneshot::Receiver<()>, view: SharedView) {
+async fn terminate_child(child: &mut Child, sudo: bool) -> Result<(), String> {
+    #[cfg(all(target_os = "macos", debug_assertions))]
+    if sudo {
+        return crate::dev_sudo::terminate(child).await;
+    }
+    if sudo {
+        return Err("Sudo capture is unavailable in this build".into());
+    }
+    child.kill().await.map_err(|e| e.to_string())
+}
+
+async fn supervise(
+    mut child: Child,
+    mut stop: oneshot::Receiver<()>,
+    view: SharedView,
+    sudo: bool,
+) {
     // Child::wait closes any stdin it owns. Keep the controller pipe here
     // so observing process exit does not itself request engine shutdown.
     let mut controller = child.stdin.take();
@@ -382,15 +431,15 @@ async fn supervise(mut child: Child, mut stop: oneshot::Receiver<()>, view: Shar
         status = child.wait() => status.map_err(|e| e.to_string()),
         _ = &mut stop => {
             drop(controller.take());
-            stop_child(&mut child).await
+            stop_child(&mut child, sudo).await
         },
         read = &mut reader => {
             drop(controller.take());
             read_complete = true;
             match read {
-                Ok(Ok(())) => stop_child(&mut child).await,
+                Ok(Ok(())) => stop_child(&mut child, sudo).await,
                 failure => {
-                    let _ = child.kill().await;
+                    let _ = stop_child(&mut child, sudo).await;
                     Err(match failure {
                         Ok(Err(error)) => error,
                         Err(error) => error.to_string(),
@@ -431,6 +480,14 @@ async fn supervise(mut child: Child, mut stop: oneshot::Receiver<()>, view: Shar
         }),
         Ok(_) => read_error,
     };
+    #[cfg(all(target_os = "macos", debug_assertions))]
+    let error = error.map(|error| {
+        if sudo {
+            format!("{error}\n{}", crate::dev_sudo::AUTH_HINT)
+        } else {
+            error
+        }
+    });
     finish_capture(&view, error);
 }
 
@@ -655,7 +712,7 @@ mod tests {
             .kill_on_drop(true)
             .spawn()
             .unwrap();
-        assert!(stop_child(&mut child).await.unwrap().success());
+        assert!(stop_child(&mut child, false).await.unwrap().success());
         assert!(child.try_wait().unwrap().is_some());
     }
     #[cfg(unix)]
@@ -679,7 +736,7 @@ mod tests {
             .unwrap();
         let view = Arc::new(Mutex::new(CaptureView::default()));
         let (sender, receiver) = oneshot::channel();
-        let mut task = tokio::spawn(supervise(child, receiver, view.clone()));
+        let mut task = tokio::spawn(supervise(child, receiver, view.clone(), false));
         tokio::time::timeout(Duration::from_secs(3), async {
             while view.lock().unwrap().revision == 0 {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -726,7 +783,7 @@ mod tests {
             .unwrap();
         let view = Arc::new(Mutex::new(CaptureView::default()));
         let (sender, receiver) = oneshot::channel();
-        let task = tokio::spawn(supervise(child, receiver, view.clone()));
+        let task = tokio::spawn(supervise(child, receiver, view.clone(), false));
         drop(sender);
         tokio::time::timeout(Duration::from_secs(3), task)
             .await
@@ -757,7 +814,7 @@ mod tests {
         let (_sender, receiver) = oneshot::channel();
         tokio::time::timeout(
             Duration::from_secs(3),
-            supervise(child, receiver, view.clone()),
+            supervise(child, receiver, view.clone(), false),
         )
         .await
         .unwrap();

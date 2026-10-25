@@ -40,6 +40,14 @@ describe("macOS helper approval", () => {
     expect((await screen.findByRole("alert")).textContent).toBe("Authorization denied");
   });
 
+  it("shows sudo development mode without offering helper registration", async () => {
+    vi.mocked(invoke).mockResolvedValue({ status: "dev_sudo", can_register: false, message: "Sudo development mode: authenticate in the terminal" });
+    render(<MacosHelper active={false} />);
+    await screen.findByText("Sudo development mode: authenticate in the terminal");
+    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.getByText(/desktop stays unprivileged/)).toBeTruthy();
+  });
+
   it("hides controls on other platforms and for unsigned builds", async () => {
     vi.mocked(invoke).mockResolvedValue({ status: "unavailable", can_register: false, message: "Signed app required" });
     render(<MacosHelper active={false} />);

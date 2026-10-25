@@ -1,5 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(all(target_os = "macos", debug_assertions))]
+mod dev_sudo;
 mod engine;
 #[cfg(target_os = "macos")]
 mod macos;
