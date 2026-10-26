@@ -5,6 +5,10 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    # Upgrade the JS API and Rust tauri crate's major/minor versions together.
+    ignore:
+      - dependency-name: "@tauri-apps/api"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     cooldown:
       default-days: 3
       semver-major-days: 7
@@ -24,6 +28,10 @@ updates:
     directory: "/src-tauri"
     schedule:
       interval: "daily"
+    # Keep the Rust crate on the same major/minor release as @tauri-apps/api.
+    ignore:
+      - dependency-name: "tauri"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     cooldown:
       default-days: 3
       semver-major-days: 7
