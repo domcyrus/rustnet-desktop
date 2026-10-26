@@ -10,6 +10,8 @@
 - 简化桌面端抓包状态、流量历史和共享界面组件，移除过时样式及无法访问的界面。 (#5)
 
 ### 新增
+- 添加仅用于 macOS debug 的 `pnpm run desktop:sudo` 抓包模式，在终端认证，界面保持普通用户权限，引擎启用严格沙箱。
+- 添加可选的 macOS 13+ SMAppService PKTAP 捕获辅助程序、XPC 身份认证、仅通过描述符访问文件及批准/移除控件。启用需要已签名并公证的构建。
 - 独立的 Tauri 2 桌面应用，包含应用、连接、流量图、抓包覆盖统计和录制。
 - 固定版本的 RustNet 引擎构建，附带临时集成补丁、debug 覆盖和独立 CI。
 - 配置 GitHub Dependabot 管理 pnpm、Cargo 和 Actions，沿用 RustNet 每日分组更新策略。

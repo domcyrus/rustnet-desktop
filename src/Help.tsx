@@ -69,7 +69,11 @@ const topics: Record<HelpContext, [string, string][]> = {
     ],
     [
       "Capture source",
-      "The dot in the capture-source button indicates live capture. Open that button for capture settings and Stop capture. Freeze view only pauses the display; capture and recording continue. Automatic chooses one interface. Linux offers All interfaces (any) when supported. An explicit interface limits capture to that source. Apply and restart ends the current session and starts a new one.",
+      "The dot in the capture-source button indicates live capture. Open that button for capture settings and Stop capture. Freeze view only pauses the display; capture and recording continue. Automatic uses PKTAP on macOS when the privileged helper is approved or sudo development mode is active; otherwise it chooses one interface. Linux offers All interfaces (any) when supported. An explicit interface limits capture to that source and disables PKTAP. Apply and restart ends the current session and starts a new one.",
+    ],
+    [
+      "macOS capture helper",
+      "In a signed, notarized macOS app, enable the capture helper and approve it in System Settings > General > Login Items & Extensions. Recheck status, choose Automatic and start capture. The interface remains unprivileged, and the engine drops root after opening capture. Stop capture before removing the helper. For unsigned development, run pnpm run desktop:sudo in a terminal and authenticate there, then choose Automatic. Only the capture engine uses sudo; release builds require the signed helper. Other development and ad-hoc launches use ordinary BPF capture with lsof attribution. ChmodBPF does not grant PKTAP access.",
     ],
     [
       "Recording",

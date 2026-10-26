@@ -3,6 +3,7 @@ import { mkdirSync, copyFileSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 import { prepareEngineSource } from "./engine-source.mjs";
+import { prepareMacosHelper } from "./prepare-macos-helper.mjs";
 
 const desktop = fileURLToPath(new URL("..", import.meta.url));
 const release = process.argv.includes("--release");
@@ -33,4 +34,5 @@ if (binaryOverride) {
   }));
   copyFileSync(path.join(metadata.target_directory, target, release ? "release" : "debug", `rustnet${suffix}`), destination);
 }
+prepareMacosHelper(desktop, target, destination);
 console.log(`Prepared RustNet capture engine for ${target}`);

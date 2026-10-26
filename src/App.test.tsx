@@ -51,6 +51,7 @@ beforeEach(() => {
     }
     if (command === "start_capture") return true;
     if (command === "choose_geoip_directory") return geoipSelection;
+    if (command === "macos_helper") return null;
     throw new Error(`Unexpected command ${command}`);
   });
 });
@@ -584,7 +585,7 @@ describe("desktop workflow", () => {
     await waitFor(() =>
       expect(picker.textContent).toContain("All interfaces (any)"),
     );
-    await selectOption("Capture interface", "Automatic (one interface)");
+    await selectOption("Capture interface", "Automatic");
     fireEvent.click(screen.getByRole("button", { name: "Start capture" }));
     await waitFor(() =>
       expect(localStorage.getItem("rustnet.interface")).toBe(""),
@@ -601,7 +602,7 @@ describe("desktop workflow", () => {
     );
     expect(
       screen.getByRole("combobox", { name: "Capture interface" }).textContent,
-    ).toContain("Automatic (one interface)");
+    ).toContain("Automatic");
   });
   it("does not silently replace an unavailable saved interface", async () => {
     view = { ...idle };

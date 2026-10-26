@@ -10,6 +10,8 @@
 - Simplify desktop capture state, traffic histories, and shared UI components; remove obsolete styles and unreachable UI. (#5)
 
 ### Added
+- Add macOS debug-only sudo capture via `pnpm run desktop:sudo`, with terminal authentication, an unprivileged UI, and strict engine sandboxing.
+- Add an opt-in macOS 13+ SMAppService capture helper for PKTAP, authenticated XPC, descriptor-only file access, and approval/removal controls. Activation requires a signed, notarized build.
 - Initial standalone Tauri 2 desktop app with applications, connections, traffic charts, capture coverage, and recording.
 - Pinned RustNet engine build with a temporary integration patch, debug overrides, and independent CI.
 - Configure GitHub Dependabot for pnpm, Cargo, and Actions using RustNet’s daily grouped update policy.

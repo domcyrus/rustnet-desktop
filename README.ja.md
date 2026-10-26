@@ -14,6 +14,7 @@ Linux は WebKitGTK 4.1 と GTK 3 の開発パッケージ、Windows は MSVC、
 Npcap が必要です。対象プラットフォーム上でビルドします。
 [pnpm](https://pnpm.io/installation) 12.15.0（`package.json` で固定）をインストールしてください。
 例: `npm install --global pnpm@12.15.0 --allow-scripts=pnpm`。このディレクトリで実行します。
+macOS ビルドには macOS 13+ と Xcode Command Line Tools（`xcode-select --install`）が必要です。
 
 ```sh
 pnpm install --frozen-lockfile
@@ -71,7 +72,8 @@ Git 状態の変更は行いません。`RUSTNET_DESKTOP_ENGINE` で既存の互
 ## キャプチャ権限
 
 デスクトップは通常ユーザーで実行してください。キャプチャ権限が必要なのはエンジンだけです。
-デスクトップは sudo の実行、防火壁ルールの追加、エンジンのサンドボックス無効化を行いません。
+任意の macOS 開発モードではエンジンだけを sudo で起動します。
+デスクトップは防火壁ルールの追加やエンジンのサンドボックス無効化を行いません。
 
 - **Linux:** 最初のビルド後、[INSTALL.md](https://github.com/domcyrus/rustnet/blob/main/INSTALL.md) に従って同梱エンジンに
   capabilities を設定します。eBPF を使わない場合の例です。必要に応じてターゲット名を変更してください。
@@ -85,15 +87,47 @@ Git 状態の変更は行いません。`RUSTNET_DESKTOP_ENGINE` で既存の互
   エンジンの絶対パスを指定できます。この指定は debug ビルド専用です。
   パッケージ版は隣接する同梱エンジンを使用します。権限設定は別のインストール手順であり、
   インストーラーが自動実行することはありません。
-- **macOS:** [INSTALL.md](https://github.com/domcyrus/rustnet/blob/main/INSTALL.md) に従って BPF のアクセス権を設定します。
-  非 root の BPF キャプチャでは利用可能なプロセス帰属の代替方式を使用します。
-  初版は特権付き PKTAP ヘルパーをインストールしません。
+- **macOS:** PKTAP を使用するには、Developer ID で署名し公証したアプリを
+  `/Applications` にインストールします。キャプチャ設定で **Enable capture helper** を選び、
+  **System Settings > General > Login Items & Extensions** で RustNet Desktop を承認します。
+  **Recheck helper status** を押し、**Automatic** を選んで開始します。
+  `SMAppService` ヘルパーは同梱エンジンを root で起動し、エンジンはキャプチャを開いた後に
+  ユーザー権限へ降格して厳格なサンドボックスを適用します。UI は通常ユーザーで動作します。
+  現在のエンジンでは明示的なインターフェース指定で PKTAP は無効になります。
+  停止後に **Remove capture helper** で解除できます。更新でヘルパーや launch-daemon plist が
+  変わった場合は、解除して再度有効化します。sudo 開発モードを使わない開発版やアドホック署名版は通常の BPF と
+  `lsof` による帰属を使用します。[INSTALL.md](https://github.com/domcyrus/rustnet/blob/main/INSTALL.md) に従って BPF 権限を設定してください。
+  ChmodBPF だけでは PKTAP を利用できません。ヘルパー承認と BPF 権限は別の設定です。
 - **Windows:** 通常ユーザーがアクセスできる Npcap をインストールします。
   管理者限定の構成では別途権限設定が必要です。
 - **FreeBSD:** 既存の CLI は引き続き対応します。初版の Tauri デスクトップは対象外です。
 
 インターフェースを選び **Start capture** を押します。権限、ドライバー、キャプチャの
 エラーは画面に表示されます。OS によってプロセス帰属が制限されても、不明な接続は表示します。
+
+## macOS sudo 開発モード
+
+Developer ID の署名や公証なしで開発中に PKTAP を使うには、対話型端末で通常ユーザー
+としてリポジトリのディレクトリから実行します。
+
+```sh
+pnpm run desktop:sudo
+```
+
+端末で sudo パスワードを入力し、デスクトップで **Automatic** を選んで開始します。
+開発セッション中は起動スクリプトがその端末の sudo 認証キャッシュを更新します。
+キャプチャエンジンだけを sudo で起動し、UI、pnpm、ビルドツールは通常ユーザーで動作します。
+エンジンはキャプチャを開いた後にユーザー権限へ降格し、厳格なサンドボックスを適用します。
+キャプチャの停止やデスクトップの終了でエンジンが停止し、記録の書き込みを完了します。
+
+macOS の debug ビルド専用で、そのセッションではインストール済みヘルパーより優先されます。
+ヘルパーの登録や sudoers の変更は不要です。明示的なインターフェース指定は PKTAP を無効にします。
+認証の期限切れや拒否はエラーとして表示されます。`pnpm run desktop:sudo` を再実行して
+認証してください。このコマンドの前に sudo を付けないでください。エンジンのソースや
+バイナリの指定は初期化時に root で実行されるため、信頼できるものだけを使用してください。
+`pnpm run desktop` で通常モードに戻ります。リリースビルドは `RUSTNET_DEV_SUDO` を無視し、
+PKTAP には引き続き署名済みヘルパーが必要です。この開発モードのテストは、署名済みの
+SMAppService デプロイの検証を代替しません。
 
 ## Linux の描画トラブル
 
@@ -150,9 +184,10 @@ pnpm run desktop:linux-compat
 - ドロップダウンは外観テーマに従います。矢印、Home/End、ラベルの先頭文字で移動し、
   Enter で選択、Escape で取り消し、Tab で閉じます。
 - キャプチャ状態の横にあるソースボタンから設定を開きます。Linux では未保存で利用可能な
-  場合、**All interfaces (any)** が初期値になります。**Automatic (one interface)** と
-  個別インターフェースも選べます。Automatic を含む保存済みの選択は維持し、利用できない
-  インターフェースは手動で変更します。キャプチャ中の **Apply and restart capture** は
+  場合、**All interfaces (any)** が初期値になります。**Automatic** と
+  個別インターフェースも選べます。macOS ではヘルパーが有効な場合、Automatic が PKTAP を試みます。
+  Automatic を含む保存済みの選択は維持し、利用できないインターフェースは手動で変更します。
+  キャプチャ中の **Apply and restart capture** は
   旧セッションの正常終了後に新しいセッションを開始します。記録には新しいファイルを使います。
 - 接続詳細は Overview、Process、Protocol に分かれ、独立してスクロールできます。
   区切りをドラッグするか左右矢印キーで幅を変更できます。**Expand** は集中表示を開き、
@@ -197,12 +232,19 @@ pnpm run desktop:linux-compat
 
 ## プロセス境界
 
-デスクトップは構造化された引数で同梱の `rustnet-capture-engine` のみを起動します。
+デスクトップは構造化された引数で、直接または承認済みの macOS ヘルパーを通じて同梱の `rustnet-capture-engine` のみを起動します。
 `--list-interfaces` はキャプチャを開始せず JSON を返します。キャプチャは
 `--headless --output jsonl --include-historic --stop-on-stdin-close` を使います。デスクトップがクラッシュ
 した場合も、制御パイプの切断で CLI の通常の終了と出力フラッシュを要求します。
 ウィンドウを閉じる際は終了を待ちます。15 秒以内に停止しない子プロセスは強制終了し、
 記録が不完全な可能性を表示します。
+
+macOS ヘルパーとアプリは、同じ Team ID と固定識別子の Developer ID 署名要件で XPC メッセージを認証します。
+ヘルパーは長さを制限したインターフェース名と、既に開かれた記録/GeoIP の記述子だけを受け取り、
+実行ファイルのパス、shell コマンド、任意の引数は受け付けません。降格先は認証済みの呼び出し元から取得し、
+ユーザーごとに一つのキャプチャを許可し、XPC 切断で停止します。特権起動では同梱エンジンを root 専用の
+ディレクトリへコピーし、署名を検証して保護されたコピーを実行します。debug 用エンジンの差し替えは拒否します。記録ファイルは通常ユーザーが排他的に作成し、
+ユーザーの GeoIP 自動検出は記述子を渡す前にアプリが行います。
 
 ブリッジは最新のスナップショットだけを保持し、1 レコードを 16 MiB に制限し、診断出力にも
 上限を設けます。UI は 500 ms ごとに直列で取得し schema 1 を検証します。Connections は
@@ -217,6 +259,7 @@ pnpm run prepare:engine
 pnpm run build
 pnpm test
 pnpm run test:engine-source
+pnpm run test:macos-helper
 pnpm run check:engine
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
@@ -227,7 +270,17 @@ pnpm run bundle
 ```
 
 `pnpm run bundle` は release CLI とデスクトップをビルドし、プラットフォームのパッケージに
-エンジンを同梱します。本番用の署名、公証の資格情報、キャプチャ権限の自動設定は未構成です。
+エンジンを同梱します。本番用の署名、公証の資格情報、Linux/Windows のキャプチャ権限の自動設定は未構成です。
+macOS ではヘルパーと launch-daemon plist も同梱します。PKTAP を有効化できるビルドには、
+`pnpm run bundle` の前に `APPLE_SIGNING_IDENTITY` を Developer ID Application の署名 ID に設定し、
+Tauri の公証資格情報（`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID`、または Apple API キー）を提供します。
+詳細は [Tauri の署名と公証ガイド](https://v2.tauri.app/distribute/sign/macos/)を参照してください。
+両方のサイドカーとアプリは識別子を維持し、同じ Team ID を使用する必要があります。
+未署名やアドホック署名でもビルドできますが、特権ヘルパーは有効化できません。
+`test:macos-helper` は macOS で通常ユーザーのブローカー/記述子テストを行い、他の環境ではスキップします。
+デーモンはインストールしません。署名済みの統合検証では承認後に Automatic を選び、
+スナップショットの帰属方式が PKTAP であること、記録のフラッシュ、UI の終了、ヘルパー解除を確認します。
+DMG 作成が Finder のレイアウト処理で停止する場合は、`CI=true pnpm run bundle` で外観設定をスキップできます。
 エンジンを変更する場合は、RustNet リポジトリで [CONTRIBUTING.md](https://github.com/domcyrus/rustnet/blob/main/CONTRIBUTING.md) の検証も実行してください。
 
 現在の Tauri の Linux 依存関係には、メンテナンス終了 crate と GLib

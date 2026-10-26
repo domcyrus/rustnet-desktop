@@ -1,6 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+#[cfg(all(target_os = "macos", debug_assertions))]
+mod dev_sudo;
 mod engine;
+#[cfg(target_os = "macos")]
+mod macos;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Manager, State};
@@ -90,6 +94,31 @@ async fn stop_capture(state: State<'_, Desktop>) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+async fn macos_helper(
+    state: State<'_, Desktop>,
+    action: String,
+) -> Result<Option<serde_json::Value>, String> {
+    if !matches!(
+        action.as_str(),
+        "status" | "register" | "unregister" | "settings"
+    ) {
+        return Err("Unknown helper operation".into());
+    }
+    let engine = state.engine.lock().await;
+    if matches!(action.as_str(), "register" | "unregister") && engine.is_active() {
+        return Err("Stop capture before changing the helper".into());
+    }
+    #[cfg(target_os = "macos")]
+    {
+        tauri::async_runtime::spawn_blocking(move || macos::manage(&action).map(Some))
+            .await
+            .map_err(|e| e.to_string())?
+    }
+    #[cfg(not(target_os = "macos"))]
+    Ok(None)
+}
+
 fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -99,7 +128,8 @@ fn main() {
             capture_view,
             start_capture,
             choose_geoip_directory,
-            stop_capture
+            stop_capture,
+            macos_helper
         ])
         .build(tauri::generate_context!())
         .expect("failed to build RustNet desktop");
