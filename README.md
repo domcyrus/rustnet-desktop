@@ -79,8 +79,8 @@ still appears as Unavailable, for example when city data is absent.
 ## Capture permissions
 
 Run the desktop as your regular user. Only the capture engine needs capture
-permissions. The desktop never invokes sudo, installs firewall rules, or disables
-the engine's sandbox.
+permissions. The optional macOS development mode invokes sudo for the engine only.
+The desktop does not install firewall rules or disable the engine's sandbox.
 
 - **Linux:** after the first engine build, grant the bundled engine the capabilities
   described in [INSTALL.md](https://github.com/domcyrus/rustnet/blob/main/INSTALL.md). For capture without eBPF, from this
@@ -104,7 +104,7 @@ the engine's sandbox.
   unprivileged. Explicit interfaces disable PKTAP in the current engine.
   Stop capture before **Remove capture helper**. Remove and enable it again after
   an update changes the helper or launch-daemon plist. Development and ad-hoc
-  builds use ordinary BPF capture with `lsof` attribution. Configure BPF access
+  builds without sudo development mode use ordinary BPF capture with `lsof` attribution. Configure BPF access
   as described in [INSTALL.md](https://github.com/domcyrus/rustnet/blob/main/INSTALL.md);
   ChmodBPF alone does not grant PKTAP access. Helper approval is separate from BPF permissions.
 - **Windows:** install Npcap with access for your normal user. An installation
@@ -115,6 +115,31 @@ the engine's sandbox.
 Choose an interface and click **Start capture**. Permission, driver, and capture
 errors appear in the application. Process attribution may be limited by the OS;
 unattributed connections remain visible.
+
+## macOS sudo development mode
+
+For PKTAP without a Developer ID signed, notarized build, run from this repository
+in an interactive terminal as your normal user:
+
+```sh
+pnpm run desktop:sudo
+```
+
+Enter your sudo password in the terminal, then choose **Automatic** and start
+capture in the desktop. The launcher keeps the terminal's cached sudo credentials
+fresh while the development session runs. Only the capture engine starts with
+sudo; the UI, pnpm and build tools stay unprivileged. The engine drops to your
+user and applies its strict sandbox after opening capture. Stop capture or close
+the desktop to stop the engine and flush the recording.
+
+This mode is macOS debug-only, overrides the installed helper for that session,
+and needs no helper registration or sudoers changes. Explicit interfaces disable
+PKTAP. If authentication expires or is denied, capture reports an error; restart
+`pnpm run desktop:sudo` to authenticate again. Never prefix this command with sudo.
+Use only trusted engine source/binary overrides because they execute with root
+privileges during initialization. Run `pnpm run desktop` to return to normal mode.
+Release builds ignore `RUSTNET_DEV_SUDO` and still require the signed helper for
+PKTAP. Testing this dev mode does not validate signed SMAppService deployment.
 
 ## Linux rendering troubleshooting
 

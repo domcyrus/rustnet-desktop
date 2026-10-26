@@ -36,6 +36,18 @@ pub fn manage(action: &str) -> Result<Value, String> {
     if !matches!(action, "status" | "register" | "unregister" | "settings") {
         return Err("Unknown helper operation".into());
     }
+    if crate::engine::sudo_mode() {
+        if action != "status" {
+            return Err(
+                "Restart without desktop:sudo to manage the installed capture helper.".into(),
+            );
+        }
+        return Ok(serde_json::json!({
+            "status": "dev_sudo",
+            "can_register": false,
+            "message": "Sudo development mode: capture uses terminal authentication. The desktop stays unprivileged; choose Automatic for PKTAP."
+        }));
+    }
     let action = CString::new(action).map_err(|e| e.to_string())?;
     // SAFETY: action stays alive throughout the synchronous native call.
     let text = take_string(unsafe { rustnet_helper_manage(action.as_ptr()) })?;
@@ -81,7 +93,7 @@ impl Drop for Capture {
     }
 }
 
-fn automatic_geoip() -> Vec<(&'static str, PathBuf)> {
+pub fn automatic_geoip() -> Vec<(&'static str, PathBuf)> {
     let mut directories = vec![PathBuf::from("resources/geoip2"), PathBuf::from(".")];
     if let Some(data) = std::env::var_os("XDG_DATA_HOME") {
         directories.push(PathBuf::from(&data).join("rustnet/geoip"));
@@ -202,5 +214,13 @@ mod tests {
             assert_eq!(state["can_register"], false);
             assert!(manage("register").is_err());
         }
+        if state["status"] == "dev_sudo" {
+            assert_eq!(state["can_register"], false);
+            for action in ["register", "unregister", "settings"] {
+                assert!(manage(action).is_err());
+            }
+        }
+        #[cfg(not(debug_assertions))]
+        assert!(!crate::engine::sudo_mode());
     }
 }

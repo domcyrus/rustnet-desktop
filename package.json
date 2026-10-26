@@ -9,6 +9,7 @@
     "test": "vitest run",
     "tauri": "tauri",
     "desktop": "tauri dev",
+    "desktop:sudo": "node scripts/desktop-sudo.mjs",
     "prepare:engine": "node scripts/prepare-engine.mjs",
     "bundle": "tauri build",
     "desktop:linux-compat": "env WEBKIT_DISABLE_DMABUF_RENDERER=1 tauri dev",

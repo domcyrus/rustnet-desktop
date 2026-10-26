@@ -63,8 +63,8 @@ debug 引擎覆盖必须支持这两个选项。更新后请重新构建旧的�
 
 ## 抓包权限
 
-使用普通用户运行桌面应用，仅抓包引擎需要抓包权限。桌面不会调用 sudo、安装防火墙
-规则或禁用引擎沙箱。
+使用普通用户运行桌面应用，仅抓包引擎需要抓包权限。可选的 macOS 开发模式仅对引擎
+调用 sudo。桌面不会安装防火墙规则或禁用引擎沙箱。
 
 - **Linux：** 首次构建引擎后，按照 [INSTALL.md](https://github.com/domcyrus/rustnet/blob/main/INSTALL.md) 配置附带引擎的
   capabilities。在此目录中，不使用 eBPF 的抓包配置示例（按需替换目标三元组）：
@@ -83,7 +83,7 @@ debug 引擎覆盖必须支持这两个选项。更新后请重新构建旧的�
   `SMAppService` 辅助进程以 root 启动内置引擎；引擎打开抓包后降权至当前用户并启用
   严格沙箱，界面始终以普通用户运行。当前引擎选择指定接口时不使用 PKTAP。
   停止抓包后可点击 **Remove capture helper**。更新更改辅助程序或 launch-daemon plist 后，
-  请移除并重新启用辅助程序。开发和临时签名构建使用普通 BPF 抓包和 `lsof` 进程归属。
+  请移除并重新启用辅助程序。未启用 sudo 开发模式的开发和临时签名构建使用普通 BPF 抓包和 `lsof` 进程归属。
   按照 [INSTALL.md](https://github.com/domcyrus/rustnet/blob/main/INSTALL.md) 配置 BPF 权限；
   ChmodBPF 本身不授予 PKTAP 权限，辅助进程批准与 BPF 权限是独立的设置。
 - **Windows：** 安装允许普通用户访问的 Npcap。若安装时限制为管理员访问，需要单独
@@ -92,6 +92,27 @@ debug 引擎覆盖必须支持这两个选项。更新后请重新构建旧的�
 
 选择接口并点击 **Start capture**。权限、驱动和抓包错误会显示在界面中。
 进程归属可能受到操作系统限制，无法归属的连接仍会显示。
+
+## macOS sudo 开发模式
+
+无需 Developer ID 签名和公证即可在开发时使用 PKTAP。在交互式终端中，以普通用户
+从仓库目录运行：
+
+```sh
+pnpm run desktop:sudo
+```
+
+在终端输入 sudo 密码，然后在桌面选择 **Automatic** 并开始抓包。开发会话运行期间，
+启动脚本会刷新该终端缓存的 sudo 凭据。只有抓包引擎通过 sudo 启动；界面、pnpm 和
+构建工具仍以普通用户运行。引擎打开抓包后降权至当前用户，并启用严格沙箱。
+停止抓包或关闭桌面会停止引擎并完成录制写入。
+
+此模式仅用于 macOS debug 构建，在本次会话中优先于已安装的辅助程序，无需注册辅助
+程序或修改 sudoers。指定接口会禁用 PKTAP。如果认证过期或被拒绝，抓包会报错；
+重新运行 `pnpm run desktop:sudo` 进行认证。不要在此命令前添加 sudo。
+自定义引擎源码或二进制会在初始化阶段以 root 执行，因此只使用可信的覆盖。
+运行 `pnpm run desktop` 可恢复正常模式。发布构建忽略 `RUSTNET_DEV_SUDO`，
+使用 PKTAP 仍需已签名的辅助程序。开发模式测试不能替代已签名 SMAppService 部署的验证。
 
 ## Linux 渲染故障排查
 
