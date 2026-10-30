@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -197,7 +198,8 @@ export default function App() {
   useEffect(() => {
     void refreshInterfaces();
   }, []);
-  useEffect(() => {
+  // Clear the previous session's selection before new rows can be clicked.
+  useLayoutEffect(() => {
     navigate(
       {
         connection: null,

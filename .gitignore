@@ -6,3 +6,5 @@ src-tauri/binaries/*
 !src-tauri/binaries/.gitkeep
 
 .engine/
+.isolated-build/
+.isolated-build.lock/

@@ -17,7 +17,11 @@ macOS builds require macOS 13+ and Xcode Command Line Tools (`xcode-select --ins
 Install [pnpm](https://pnpm.io/installation) 12.15.0 (pinned in `package.json`).
 For example, `npm install --global pnpm@12.15.0 --allow-scripts=pnpm`.
 
-From this directory:
+For an isolated install/build on macOS or Linux, start with
+`node scripts/isolated-build.mjs`. No prior `pnpm install` is needed.
+See [isolated builds and sudo capture](BUILDING.md).
+
+For ordinary development with hot reload, from this directory:
 
 ```sh
 pnpm install --frozen-lockfile
@@ -118,28 +122,18 @@ unattributed connections remain visible.
 
 ## macOS sudo development mode
 
-For PKTAP without a Developer ID signed, notarized build, run from this repository
-in an interactive terminal as your normal user:
+For PKTAP without signing or notarization, run as your normal user:
 
 ```sh
-pnpm run desktop:sudo
+node scripts/desktop-sudo.mjs
 ```
 
-Enter your sudo password in the terminal, then choose **Automatic** and start
-capture in the desktop. The launcher keeps the terminal's cached sudo credentials
-fresh while the development session runs. Only the capture engine starts with
-sudo; the UI, pnpm and build tools stay unprivileged. The engine drops to your
-user and applies its strict sandbox after opening capture. Stop capture or close
-the desktop to stop the engine and flush the recording.
-
-This mode is macOS debug-only, overrides the installed helper for that session,
-and needs no helper registration or sudoers changes. Explicit interfaces disable
-PKTAP. If authentication expires or is denied, capture reports an error; restart
-`pnpm run desktop:sudo` to authenticate again. Never prefix this command with sudo.
-Use only trusted engine source/binary overrides because they execute with root
-privileges during initialization. Run `pnpm run desktop` to return to normal mode.
-Release builds ignore `RUSTNET_DEV_SUDO` and still require the signed helper for
-PKTAP. Testing this dev mode does not validate signed SMAppService deployment.
+The launcher completes an isolated offline debug build and tests before asking for
+sudo authentication. It then starts the built desktop with embedded assets, with
+no dev server or build watcher. Choose **Automatic** and start capture. Only the
+engine uses sudo; the UI stays unprivileged. Credentials are not refreshed on a
+timer. See [isolated builds](BUILDING.md) for prerequisites, limitations and retry
+instructions. `pnpm run desktop:sudo` remains an alias when dependencies are installed.
 
 ## Linux rendering troubleshooting
 

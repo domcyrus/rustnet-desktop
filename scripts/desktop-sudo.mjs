@@ -1,47 +1,43 @@
 import { execFileSync, spawn } from "node:child_process";
+import { isolatedBuild } from "./isolated-build.mjs";
+import { sudoSession } from "./sudo-session.mjs";
 
 if (process.platform !== "darwin" || process.getuid?.() === 0) {
   console.error("Run desktop:sudo on macOS as your normal user, without sudo before pnpm.");
   process.exit(1);
 }
 if (!process.stdin.isTTY) {
-  console.error("Run desktop:sudo from an interactive terminal so sudo can authenticate there.");
+  console.error("Run desktop:sudo from an interactive terminal so sudo can authenticate after the build.");
   process.exit(1);
 }
 
 try {
-  console.log("Authenticate capture with sudo. The desktop and build tools stay unprivileged.");
-  execFileSync("/usr/bin/sudo", ["-v"], { stdio: "inherit" });
-} catch {
-  console.error("Sudo authentication failed; the desktop was not started.");
-  process.exit(1);
+  await sudoSession({
+    build: isolatedBuild,
+    authenticate: () => {
+      // Authentication is reached only after the isolated build succeeds.
+      console.log("Build complete. Authenticate capture with sudo; only the desktop starts next.");
+      execFileSync("/usr/bin/sudo", ["-v"], { stdio: "inherit" });
+    },
+    launch: (executable) => new Promise((resolve, reject) => {
+      const env = { ...process.env, RUSTNET_DEV_SUDO: "1" };
+      // The isolated build always uses the pinned engine beside the executable.
+      delete env.RUSTNET_DESKTOP_ENGINE;
+      delete env.RUSTNET_ENGINE_SOURCE;
+      const child = spawn(executable, [], { stdio: "inherit", env });
+      const stop = () => child.kill("SIGTERM");
+      process.on("SIGINT", stop);
+      process.on("SIGTERM", stop);
+      child.on("error", reject);
+      child.on("exit", (code, signal) => {
+        process.removeListener("SIGINT", stop);
+        process.removeListener("SIGTERM", stop);
+        if (code === 0 || signal === "SIGINT" || signal === "SIGTERM") resolve();
+        else reject(new Error(`Desktop exited with ${signal || code}`));
+      });
+    }),
+  });
+} catch (error) {
+  console.error(error.message);
+  process.exitCode = 1;
 }
-
-// Refresh only this terminal's existing credential while the dev session lives.
-// Never request passwords through the capture protocol or change sudoers.
-const refresh = setInterval(() => {
-  try {
-    execFileSync("/usr/bin/sudo", ["-n", "-v"], { stdio: "ignore", timeout: 5000 });
-  } catch {
-    clearInterval(refresh);
-    console.error("Sudo credentials expired. Restart pnpm run desktop:sudo to authenticate again.");
-  }
-}, 60000);
-
-const child = spawn("pnpm", ["run", "desktop"], {
-  stdio: "inherit",
-  env: { ...process.env, RUSTNET_DEV_SUDO: "1" },
-});
-// Terminal signals also reach the child. Stay alive until it has shut down.
-const interrupt = () => {};
-const terminate = () => child.kill("SIGTERM");
-process.on("SIGINT", interrupt);
-process.on("SIGTERM", terminate);
-function finish(code) {
-  clearInterval(refresh);
-  process.removeListener("SIGINT", interrupt);
-  process.removeListener("SIGTERM", terminate);
-  process.exitCode = code;
-}
-child.on("error", (error) => { console.error(error.message); finish(1); });
-child.on("exit", (code, signal) => finish(code ?? (signal === "SIGINT" ? 130 : 1)));

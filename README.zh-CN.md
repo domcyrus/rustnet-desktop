@@ -15,6 +15,9 @@ WebKitGTK 4.1 和 GTK 3 开发包；Windows 需要 MSVC、WebView2 和 Npcap。
 macOS 构建要求 macOS 13+ 和 Xcode 命令行工具（`xcode-select --install`）。
 在此目录运行：
 
+macOS 和 Linux 可先运行 `node scripts/isolated-build.mjs`，无需预先安装项目依赖。
+详情见[隔离构建及 sudo 抓包](BUILDING.zh-CN.md)。以下为普通热重载开发流程：
+
 ```sh
 pnpm install --frozen-lockfile
 pnpm run desktop
@@ -95,24 +98,17 @@ debug 引擎覆盖必须支持这两个选项。更新后请重新构建旧的�
 
 ## macOS sudo 开发模式
 
-无需 Developer ID 签名和公证即可在开发时使用 PKTAP。在交互式终端中，以普通用户
-从仓库目录运行：
+无需签名或公证即可使用 PKTAP，以普通用户执行：
 
 ```sh
-pnpm run desktop:sudo
+node scripts/desktop-sudo.mjs
 ```
 
-在终端输入 sudo 密码，然后在桌面选择 **Automatic** 并开始抓包。开发会话运行期间，
-启动脚本会刷新该终端缓存的 sudo 凭据。只有抓包引擎通过 sudo 启动；界面、pnpm 和
-构建工具仍以普通用户运行。引擎打开抓包后降权至当前用户，并启用严格沙箱。
-停止抓包或关闭桌面会停止引擎并完成录制写入。
-
-此模式仅用于 macOS debug 构建，在本次会话中优先于已安装的辅助程序，无需注册辅助
-程序或修改 sudoers。指定接口会禁用 PKTAP。如果认证过期或被拒绝，抓包会报错；
-重新运行 `pnpm run desktop:sudo` 进行认证。不要在此命令前添加 sudo。
-自定义引擎源码或二进制会在初始化阶段以 root 执行，因此只使用可信的覆盖。
-运行 `pnpm run desktop` 可恢复正常模式。发布构建忽略 `RUSTNET_DEV_SUDO`，
-使用 PKTAP 仍需已签名的辅助程序。开发模式测试不能替代已签名 SMAppService 部署的验证。
+启动器先完成隔离的离线 debug 构建和测试，然后才请求 sudo 认证。
+随后直接启动包含内嵌资源的桌面程序，不运行开发服务器或构建监视器。
+选择 **Automatic** 后开始抓包。只有引擎使用 sudo，界面保持普通用户权限。
+不会定期刷新凭据。前置条件、限制和重试说明见[隔离构建指南](BUILDING.zh-CN.md)。
+安装过依赖时，`pnpm run desktop:sudo` 仍可作为别名使用。
 
 ## Linux 渲染故障排查
 

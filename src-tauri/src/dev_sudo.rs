@@ -4,10 +4,10 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::process::{Child, Command};
 
-pub const AUTH_HINT: &str = "Restart pnpm run desktop:sudo in an interactive terminal to authenticate capture. Do not run the desktop itself with sudo.";
+pub const AUTH_HINT: &str = "Restart node scripts/desktop-sudo.mjs in an interactive terminal to build and then authenticate capture. Do not run the desktop itself with sudo.";
 
 pub fn enabled() -> bool {
-    cfg!(dev) && std::env::var_os("RUSTNET_DEV_SUDO").is_some_and(|value| value == "1")
+    std::env::var_os("RUSTNET_DEV_SUDO").is_some_and(|value| value == "1")
 }
 
 pub async fn command(engine: &Path) -> Result<Command, String> {
