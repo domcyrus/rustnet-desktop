@@ -25,20 +25,43 @@ fn main() {
             .status()
             .expect("Xcode Command Line Tools are required");
         assert!(status.success(), "macOS helper client compilation failed");
+        let status = std::process::Command::new("xcrun")
+            .args([
+                "clang",
+                "-fobjc-arc",
+                "-Wall",
+                "-Wextra",
+                "-Werror",
+                "-arch",
+                arch,
+                "-mmacosx-version-min=13.0",
+                "-c",
+                "macos/application-icons.m",
+                "-o",
+            ])
+            .arg(out.join("application-icons.o"))
+            .status()
+            .expect("Xcode Command Line Tools are required");
+        assert!(
+            status.success(),
+            "macOS application icon compilation failed"
+        );
         let status = std::process::Command::new("ar")
             .arg("crs")
             .arg(out.join("libhelper_client.a"))
             .arg(out.join("helper-client.o"))
+            .arg(out.join("application-icons.o"))
             .status()
             .expect("Cannot build macOS helper client archive");
         assert!(status.success());
         println!("cargo:rustc-link-search=native={}", out.display());
         println!("cargo:rustc-link-lib=static=helper_client");
-        for framework in ["Foundation", "Security", "ServiceManagement"] {
+        for framework in ["Foundation", "Security", "ServiceManagement", "AppKit"] {
             println!("cargo:rustc-link-lib=framework={framework}");
         }
         println!("cargo:rerun-if-changed=macos/client.m");
         println!("cargo:rerun-if-changed=macos/Helper.h");
+        println!("cargo:rerun-if-changed=macos/application-icons.m");
     }
     println!(
         "cargo:rustc-env=RUSTNET_TARGET={}",

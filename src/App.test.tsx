@@ -52,6 +52,7 @@ beforeEach(() => {
     if (command === "start_capture") return true;
     if (command === "choose_geoip_directory") return geoipSelection;
     if (command === "macos_helper") return null;
+    if (command === "application_icon") return null;
     throw new Error(`Unexpected command ${command}`);
   });
 });

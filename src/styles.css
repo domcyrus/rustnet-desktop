@@ -817,6 +817,17 @@ dd {
   color: var(--accent);
   border-color: transparent;
 }
+.app-icon.native,
+.app-row .app-icon.native {
+  background: transparent;
+  border-color: transparent;
+}
+.app-icon img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
 .app-title h2 {
   font-size: 24px;
 }
