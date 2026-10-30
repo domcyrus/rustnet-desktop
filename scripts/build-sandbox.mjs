@@ -11,7 +11,8 @@ export function findTool(name) {
 }
 
 export function toolchain() {
-  const cargo = realpathSync(execFileSync(findTool("rustup"), ["which", "cargo"], { encoding: "utf8" }).trim());
+  // Preserve argv[0]: Homebrew's rustup symlink targets the rustup-init binary.
+  const cargo = realpathSync(execFileSync("rustup", ["which", "cargo"], { encoding: "utf8" }).trim());
   const pnpm = findTool("pnpm");
   let pnpmRoot = path.dirname(pnpm);
   for (let directory = pnpmRoot; directory !== path.dirname(directory); directory = path.dirname(directory)) {

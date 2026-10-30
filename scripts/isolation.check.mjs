@@ -84,8 +84,11 @@ test("OS sandbox blocks host files, subprocess escapes and offline networking", 
       const net = require('node:net');
       assert.throws(() => fs.readFileSync(${JSON.stringify(secret)}));
       assert.throws(() => fs.readFileSync(${JSON.stringify(path.join(cache, "control"))}));
-      assert.throws(() => fs.writeFileSync(${JSON.stringify(secret)}, 'changed'));
       assert.throws(() => cp.execFileSync('/bin/cat', [${JSON.stringify(secret)}], {stdio:'pipe'}));
+      // Linux may create a same-named file in its private /tmp mount. The host
+      // secret must remain unchanged, which the parent verifies after exit.
+      if (process.platform === 'darwin') assert.throws(() => fs.writeFileSync(${JSON.stringify(secret)}, 'changed'));
+      else { try { fs.writeFileSync(${JSON.stringify(secret)}, 'changed'); } catch {} }
       fs.writeFileSync(${JSON.stringify(path.join(root, "work/allowed"))}, 'allowed');
       fs.writeFileSync(${JSON.stringify(path.join(cache, "target/allowed"))}, 'allowed');
       assert.equal(process.env.SSH_AUTH_SOCK, undefined);
