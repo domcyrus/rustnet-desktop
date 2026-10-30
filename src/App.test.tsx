@@ -281,7 +281,9 @@ describe("desktop workflow", () => {
     const combined = await screen.findByRole("button", {
       name: /Firefox.*2 connections.*2 PIDs/,
     });
-    expect(combined.getAttribute("aria-pressed")).toBe("true");
+    await waitFor(() =>
+      expect(combined.getAttribute("aria-pressed")).toBe("true"),
+    );
     expect(
       screen.getAllByRole("button", { name: /Firefox.*connections/ }),
     ).toHaveLength(1);

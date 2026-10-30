@@ -73,7 +73,7 @@ const topics: Record<HelpContext, [string, string][]> = {
     ],
     [
       "macOS capture helper",
-      "In a signed, notarized macOS app, enable the capture helper and approve it in System Settings > General > Login Items & Extensions. Recheck status, choose Automatic and start capture. The interface remains unprivileged, and the engine drops root after opening capture. Stop capture before removing the helper. For unsigned development, run pnpm run desktop:sudo in a terminal and authenticate there, then choose Automatic. Only the capture engine uses sudo; release builds require the signed helper. Other development and ad-hoc launches use ordinary BPF capture with lsof attribution. ChmodBPF does not grant PKTAP access.",
+      "In a signed, notarized macOS app, enable the capture helper and approve it in System Settings > General > Login Items & Extensions. Recheck status, choose Automatic and start capture. The interface remains unprivileged, and the engine drops root after opening capture. Stop capture before removing the helper. For unsigned development, run node scripts/desktop-sudo.mjs in a terminal. It builds and tests in isolation before asking for authentication, then starts the desktop with embedded assets. Choose Automatic. Only the capture engine uses sudo; release builds require the signed helper. Other development and ad-hoc launches use ordinary BPF capture with lsof attribution. ChmodBPF does not grant PKTAP access.",
     ],
     [
       "Recording",

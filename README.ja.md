@@ -16,6 +16,10 @@ Npcap が必要です。対象プラットフォーム上でビルドします�
 例: `npm install --global pnpm@12.15.0 --allow-scripts=pnpm`。このディレクトリで実行します。
 macOS ビルドには macOS 13+ と Xcode Command Line Tools（`xcode-select --install`）が必要です。
 
+macOS と Linux では `node scripts/isolated-build.mjs` で隔離ビルドを開始できます。
+事前の依存関係インストールは不要です。[隔離ビルドと sudo キャプチャ](BUILDING.ja.md)を参照してください。
+以下は通常のホットリロード開発手順です。
+
 ```sh
 pnpm install --frozen-lockfile
 pnpm run desktop
@@ -107,27 +111,17 @@ Git 状態の変更は行いません。`RUSTNET_DESKTOP_ENGINE` で既存の互
 
 ## macOS sudo 開発モード
 
-Developer ID の署名や公証なしで開発中に PKTAP を使うには、対話型端末で通常ユーザー
-としてリポジトリのディレクトリから実行します。
+署名や公証なしで PKTAP を使うには、通常ユーザーで実行します。
 
 ```sh
-pnpm run desktop:sudo
+node scripts/desktop-sudo.mjs
 ```
 
-端末で sudo パスワードを入力し、デスクトップで **Automatic** を選んで開始します。
-開発セッション中は起動スクリプトがその端末の sudo 認証キャッシュを更新します。
-キャプチャエンジンだけを sudo で起動し、UI、pnpm、ビルドツールは通常ユーザーで動作します。
-エンジンはキャプチャを開いた後にユーザー権限へ降格し、厳格なサンドボックスを適用します。
-キャプチャの停止やデスクトップの終了でエンジンが停止し、記録の書き込みを完了します。
-
-macOS の debug ビルド専用で、そのセッションではインストール済みヘルパーより優先されます。
-ヘルパーの登録や sudoers の変更は不要です。明示的なインターフェース指定は PKTAP を無効にします。
-認証の期限切れや拒否はエラーとして表示されます。`pnpm run desktop:sudo` を再実行して
-認証してください。このコマンドの前に sudo を付けないでください。エンジンのソースや
-バイナリの指定は初期化時に root で実行されるため、信頼できるものだけを使用してください。
-`pnpm run desktop` で通常モードに戻ります。リリースビルドは `RUSTNET_DEV_SUDO` を無視し、
-PKTAP には引き続き署名済みヘルパーが必要です。この開発モードのテストは、署名済みの
-SMAppService デプロイの検証を代替しません。
+隔離されたオフラインの debug ビルドとテストを完了してから sudo 認証を要求します。
+その後はリソースを内蔵したデスクトップを直接起動し、開発サーバーやビルド監視は使いません。
+**Automatic** を選んで開始してください。sudo を使うのはエンジンだけで、UI は通常ユーザーのままです。
+認証を定期更新しません。前提条件、制限、再試行については[隔離ビルド](BUILDING.ja.md)を参照してください。
+依存関係をインストール済みなら `pnpm run desktop:sudo` も別名として使えます。
 
 ## Linux の描画トラブル
 
