@@ -37,11 +37,19 @@ On macOS, use an interactive terminal as your regular user:
 node scripts/desktop-sudo.mjs
 ```
 
-`pnpm run desktop:sudo` is an alias when project dependencies are already installed. The direct Node command avoids needing an ordinary dependency install. The launcher first completes the isolated debug build and tests. Only after success does it request sudo authentication, then it directly runs the built desktop with embedded assets. No Vite server, watcher, compiler or package-manager task is started after authentication. There is no periodic sudo credential refresh.
+To reuse the existing debug desktop and capture engine without fetching dependencies, compiling or running tests:
+
+```sh
+node scripts/desktop-sudo.mjs --no-build
+```
+
+This checks that both executables exist in `.isolated-build/target/debug/` before requesting sudo authentication. Missing, non-executable or symlinked artifacts fail with a rebuild instruction; it never rebuilds automatically. It holds the same build lock until the desktop exits. It does not check whether the binaries match current sources, so omit `--no-build` after source or dependency changes. `pnpm run desktop:sudo --no-build` is also supported.
+
+`pnpm run desktop:sudo` is an alias when project dependencies are already installed. The direct Node command avoids needing an ordinary dependency install. By default, the launcher first completes the isolated debug build and tests. Only after success does it request sudo authentication, then it directly runs the built desktop with embedded assets. No Vite server, watcher, compiler or package-manager task is started after authentication. There is no periodic sudo credential refresh.
 
 Choose **Automatic** and start capture. Only the engine starts through sudo; the UI stays unprivileged. The pinned engine drops privileges and applies its strict sandbox after opening capture. Explicit interfaces disable PKTAP. Engine source/binary overrides are not supported by this workflow. No helper registration, signing, notarization or sudoers changes are required. Release builds still ignore `RUSTNET_DEV_SUDO` and use the signed helper for PKTAP.
 
-If sudo credentials expire, an existing capture continues but a new capture may fail. Quit the desktop and rerun the command to rebuild and authenticate. Stop capture or close the desktop to flush the recording. Live PKTAP capture and signed SMAppService deployment still require separate validation.
+If sudo credentials expire, an existing capture continues but a new capture may fail. Quit the desktop and rerun with `--no-build` to authenticate and reuse the same build. Stop capture or close the desktop to flush the recording. Live PKTAP capture and signed SMAppService deployment still require separate validation.
 
 ## Boundaries and checks
 

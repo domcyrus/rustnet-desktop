@@ -128,6 +128,8 @@ For PKTAP without signing or notarization, run as your normal user:
 node scripts/desktop-sudo.mjs
 ```
 
+To authenticate and reuse the existing debug build without rebuilding or testing, run `node scripts/desktop-sudo.mjs --no-build`. Rebuild after changing source or dependencies.
+
 The launcher completes an isolated offline debug build and tests before asking for
 sudo authentication. It then starts the built desktop with embedded assets, with
 no dev server or build watcher. Choose **Automatic** and start capture. Only the

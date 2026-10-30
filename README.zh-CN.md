@@ -104,6 +104,8 @@ debug 引擎覆盖必须支持这两个选项。更新后请重新构建旧的�
 node scripts/desktop-sudo.mjs
 ```
 
+如需认证并复用现有 debug 构建，跳过编译和测试，请运行 `node scripts/desktop-sudo.mjs --no-build`。修改源码或依赖后请重新构建。
+
 启动器先完成隔离的离线 debug 构建和测试，然后才请求 sudo 认证。
 随后直接启动包含内嵌资源的桌面程序，不运行开发服务器或构建监视器。
 选择 **Automatic** 后开始抓包。只有引擎使用 sudo，界面保持普通用户权限。
