@@ -574,6 +574,24 @@ describe("desktop workflow", () => {
     await screen.findByRole("button", { name: /Unattributed.*100 kB\/s/ });
     expect(screen.getByRole("heading", { name: "Firefox" })).toBeTruthy();
   });
+  it("clears the old session selection and accepts selection in the new session", async () => {
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole("button", { name: /Firefox.*1 connections/ }),
+    );
+    await screen.findByRole("heading", { name: "Firefox" });
+    view = structuredClone(view);
+    view.session++;
+    view.revision = 1;
+    view.snapshot!.connections[0].process!.name = "New session app";
+    const newApp = await screen.findByRole("button", {
+      name: /New session app.*1 connections/,
+    });
+    expect(screen.getByRole("heading", { name: "All traffic" })).toBeTruthy();
+    fireEvent.click(newApp);
+    await screen.findByRole("heading", { name: "New session app" });
+    expect(screen.queryByRole("heading", { name: "Firefox" })).toBeNull();
+  });
   it("defaults to any when offered, but preserves an explicitly saved automatic choice", async () => {
     view = { ...idle };
     availableInterfaces.push({
