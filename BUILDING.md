@@ -4,6 +4,8 @@
 
 Use this workflow on macOS or Linux to reduce the host access available to dependency scripts, build tools and tests. Install the normal platform prerequisites, Rust through rustup, Node.js and the pnpm version pinned in `package.json` first. These tools and this repository's launcher scripts are trusted inputs. On Linux, also install Bubblewrap (`sudo apt-get install bubblewrap` on Debian/Ubuntu); unprivileged user namespaces must be available. macOS requires the system `sandbox-exec` command. Windows is unsupported by this workflow.
 
+On Ubuntu with AppArmor user-namespace restrictions, an administrator must also enable the distribution's `bwrap-userns-restrict` profile (provided by `apparmor-profiles` on Ubuntu 24.04). See [Ubuntu's namespace guidance](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007). The launcher does not change system policy or disable AppArmor; a namespace setup failure stops the build.
+
 From the repository, without running `pnpm install` first:
 
 ```sh

@@ -4,6 +4,8 @@
 
 macOS または Linux で、依存関係のスクリプト、ビルドツール、テストによるホストへのアクセスを制限します。通常のプラットフォーム依存関係、rustup で導入した Rust、Node.js、`package.json` で固定した pnpm を先にインストールしてください。これらのツールとリポジトリの起動スクリプトは信頼する入力です。Linux では Bubblewrap（Debian/Ubuntu では `sudo apt-get install bubblewrap`）と非特権ユーザー名前空間が必要です。macOS ではシステムの `sandbox-exec` が必要です。この手順は Windows に対応していません。
 
+AppArmor がユーザー名前空間を制限する Ubuntu では、管理者が配布元の `bwrap-userns-restrict` プロファイルも有効にする必要があります（Ubuntu 24.04 では `apparmor-profiles` が提供）。[Ubuntu の名前空間ガイド](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007)を参照してください。起動スクリプトはシステムポリシーの変更や AppArmor の無効化を行わず、名前空間の初期化に失敗するとビルドを停止します。
+
 リポジトリから実行します。事前の `pnpm install` は不要です。
 
 ```sh

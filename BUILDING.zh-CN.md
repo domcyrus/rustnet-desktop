@@ -4,6 +4,8 @@
 
 此流程在 macOS 或 Linux 上限制依赖脚本、构建工具和测试对宿主机的访问。先安装常规平台依赖、通过 rustup 安装的 Rust、Node.js，以及 `package.json` 固定版本的 pnpm。这些工具和仓库中的启动脚本属于可信输入。Linux 还需要 Bubblewrap（Debian/Ubuntu 可运行 `sudo apt-get install bubblewrap`），并支持非特权用户命名空间。macOS 需要系统的 `sandbox-exec`。此流程不支持 Windows。
 
+在启用 AppArmor 用户命名空间限制的 Ubuntu 上，还需管理员启用发行版提供的 `bwrap-userns-restrict` 配置（Ubuntu 24.04 由 `apparmor-profiles` 提供）。参见 [Ubuntu 命名空间说明](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007)。启动器不会修改系统策略或禁用 AppArmor；命名空间初始化失败会停止构建。
+
 在仓库目录执行，无需先运行 `pnpm install`：
 
 ```sh

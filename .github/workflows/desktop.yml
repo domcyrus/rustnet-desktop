@@ -17,6 +17,7 @@ concurrency:
 jobs:
   isolation:
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
@@ -31,7 +32,11 @@ jobs:
           node-version: '24'
       - name: Install Bubblewrap
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y bubblewrap
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap apparmor-profiles
+          # Permit namespace setup through the distro's scoped bwrap profile.
+          sudo apparmor_parser -r /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
       # These tests need no npm dependencies and exercise the actual OS boundary.
       - run: node --test scripts/isolation.check.mjs
 
