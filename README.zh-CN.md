@@ -31,7 +31,7 @@ pnpm run desktop
 
 ### 引擎开发与更新
 
-此私有仓库暂时通过 `engine/patches/0001-desktop-integration.patch` 保存尚未合入上游的
+此仓库暂时通过 `engine/patches/0001-desktop-integration.patch` 保存尚未合入上游的
 接口发现、受控关闭、历史连接、丰富元数据和抓包覆盖统计等改动。原始改动仍保留在
 RustNet 检出目录，供单独审查。合入上游后，将 `engine.lock.json` 更新到相应提交，
 并删除补丁条目及文件。每个补丁均有 SHA-256 校验值，修改补丁时必须更新锁文件。
