@@ -9,7 +9,7 @@ snapshots. No sample traffic is used by the application.
 ## Roadmap
 
 We would like to provide signed binaries for macOS and Windows, including macOS
-notarization. This will require funding to cover code-signing costs.
+notarization. This may require some funding to cover code-signing costs.
 
 ## Develop
 
