@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { sampleDesktopRates, type DesktopRates } from "./desktop-rates";
 import {
@@ -64,8 +64,20 @@ export function useCapture() {
   const [frozen, setFrozen] = useState<CaptureState | null>(null);
   const [bridgeError, setBridgeError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState(0);
+  const [hidden, setHidden] = useState(() => document.hidden);
+  const acceptedVersion = useRef(0);
   const acceptView = useCallback((view: CaptureView) => {
+    acceptedVersion.current++;
     setLive((previous) => advance(previous, view));
+  }, []);
+  const paused = frozen !== null && frozen.rates.session === live.rates.session;
+  const suspended = paused || hidden;
+
+  useEffect(() => {
+    const visibilityChanged = () => setHidden(document.hidden);
+    document.addEventListener("visibilitychange", visibilityChanged);
+    return () =>
+      document.removeEventListener("visibilitychange", visibilityChanged);
   }, []);
 
   useEffect(() => {
@@ -73,20 +85,54 @@ export function useCapture() {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
     let lastRevision = "";
+    let known: Omit<CaptureView, "snapshot"> | null = null;
     async function poll() {
+      const version = acceptedVersion.current;
       try {
-        const next = parseView(await invoke<unknown>("capture_view"));
-        if (!cancelled) {
+        const response = await invoke<unknown>("capture_view", {
+          known,
+          includeSnapshot: !suspended,
+        });
+        if (!cancelled && version === acceptedVersion.current) {
           setBridgeError(null);
-          acceptView(next);
-          const key = `${next.session}:${next.revision}`;
-          if (key !== lastRevision) {
-            lastRevision = key;
-            setLastUpdated(Date.now());
+          if (response !== null) {
+            const next = parseView(response);
+            const { snapshot: _snapshot, ...cursor } = next;
+            known = cursor;
+            if (suspended) {
+              // Keep capture status current without processing connection data.
+              setLive((previous) => {
+                if (next.session !== previous.rates.session)
+                  return initialState(next);
+                return {
+                  ...previous,
+                  rates: {
+                    ...previous.rates,
+                    view: {
+                      ...previous.rates.view,
+                      status: next.status,
+                      error: next.error,
+                      export_path: next.export_path,
+                    },
+                  },
+                };
+              });
+            } else {
+              acceptView(next);
+              const key = `${next.session}:${next.revision}`;
+              if (key !== lastRevision) {
+                lastRevision = key;
+                setLastUpdated(Date.now());
+              }
+            }
           }
+        } else if (!cancelled) {
+          // A start/stop command supplied a newer view while this poll was pending.
+          known = null;
         }
       } catch (error) {
-        if (!cancelled) setBridgeError(`Capture bridge: ${errorText(error)}`);
+        if (!cancelled && version === acceptedVersion.current)
+          setBridgeError(`Capture bridge: ${errorText(error)}`);
       } finally {
         if (!cancelled) timer = setTimeout(poll, 500);
       }
@@ -96,13 +142,13 @@ export function useCapture() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [acceptView]);
+  }, [acceptView, suspended]);
 
-  const paused = frozen !== null && frozen.rates.session === live.rates.session;
   return {
     view: live.rates.view,
     display: paused ? frozen : live,
     paused,
+    updatesSuspended: suspended,
     togglePaused: () => setFrozen(paused ? null : live),
     acceptView,
     bridgeError,

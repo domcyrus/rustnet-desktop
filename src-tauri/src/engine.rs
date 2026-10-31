@@ -4,8 +4,8 @@ use std::process::Stdio;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use serde::Serialize;
-use serde_json::Value;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, value::RawValue};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 use tokio::process::{Child, Command};
 use tokio::sync::oneshot;
@@ -24,7 +24,62 @@ pub struct CaptureView {
     pub status: String,
     pub error: Option<String>,
     pub export_path: Option<String>,
-    pub snapshot: Option<Value>,
+    pub snapshot: Option<Arc<Snapshot>>,
+}
+
+// Keep the validated wire document intact instead of allocating a JSON tree.
+pub struct Snapshot {
+    json: Box<RawValue>,
+    status: String,
+    error: Option<String>,
+}
+
+impl Serialize for Snapshot {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        self.json.serialize(serializer)
+    }
+}
+
+#[derive(Deserialize, PartialEq, Eq)]
+pub struct CaptureCursor {
+    session: u64,
+    revision: u64,
+    status: String,
+    error: Option<String>,
+    export_path: Option<String>,
+}
+
+impl CaptureView {
+    fn cursor(&self) -> CaptureCursor {
+        CaptureCursor {
+            session: self.session,
+            revision: self.revision,
+            status: self.status.clone(),
+            error: self.error.clone(),
+            export_path: self.export_path.clone(),
+        }
+    }
+
+    fn update(&self, known: Option<&CaptureCursor>, include_snapshot: bool) -> Option<Self> {
+        if known.is_some_and(|known| {
+            let mut current = self.cursor();
+            // Status-only consumers do not need notifications for packet updates.
+            if !include_snapshot {
+                current.revision = known.revision;
+            }
+            *known == current
+        }) {
+            return None;
+        }
+        Some(Self {
+            snapshot: if include_snapshot {
+                self.snapshot.clone()
+            } else {
+                None
+            },
+            ..self.clone()
+        })
+    }
 }
 
 struct Running {
@@ -56,8 +111,15 @@ impl Engine {
             .is_some_and(|run| !run.task.is_finished())
     }
 
-    pub fn view(&self) -> CaptureView {
-        self.view.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    pub fn view(
+        &self,
+        known: Option<&CaptureCursor>,
+        include_snapshot: bool,
+    ) -> Option<CaptureView> {
+        self.view
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .update(known, include_snapshot)
     }
 
     pub async fn start(
@@ -341,19 +403,37 @@ async fn diagnostics(mut reader: impl AsyncRead + Unpin) -> String {
     String::from_utf8_lossy(&tail).trim().to_string()
 }
 
-fn decode_snapshot(bytes: &[u8]) -> Result<Value, String> {
-    let value: Value =
+fn decode_snapshot(bytes: &[u8]) -> Result<Snapshot, String> {
+    #[derive(Deserialize)]
+    struct Header<'a> {
+        schema_version: u64,
+        #[serde(rename = "type")]
+        kind: String,
+        #[serde(borrow)]
+        connections: &'a RawValue,
+        runtime: Runtime,
+    }
+    #[derive(Deserialize)]
+    struct Runtime {
+        status: String,
+        capture_error: Option<String>,
+    }
+    let value: Header<'_> =
         serde_json::from_slice(bytes).map_err(|e| format!("Invalid capture snapshot: {e}"))?;
-    if value["schema_version"] != 1
-        || value["type"] != "snapshot"
-        || !value["connections"].is_array()
-        || !value["runtime"]["status"].is_string()
+    if value.schema_version != 1
+        || value.kind != "snapshot"
+        || !value.connections.get().starts_with('[')
     {
         return Err(
             "Unsupported capture schema. Rebuild the desktop's bundled RustNet engine.".into(),
         );
     }
-    Ok(value)
+    Ok(Snapshot {
+        json: serde_json::from_slice(bytes)
+            .map_err(|e| format!("Invalid capture snapshot: {e}"))?,
+        status: value.runtime.status,
+        error: value.runtime.capture_error,
+    })
 }
 
 async fn read_snapshots(
@@ -378,16 +458,13 @@ async fn read_snapshots(
         let mut view = view.lock().unwrap_or_else(|e| e.into_inner());
         // A late running snapshot cannot undo an explicit stop request.
         if view.status != "stopping" {
-            view.status = snapshot["runtime"]["status"]
-                .as_str()
-                .unwrap_or("error")
-                .into();
+            view.status = snapshot.status.clone();
         }
-        if let Some(error) = snapshot["runtime"]["capture_error"].as_str() {
-            view.error = Some(error.into());
+        if let Some(error) = &snapshot.error {
+            view.error = Some(error.clone());
         }
         view.revision += 1;
-        view.snapshot = Some(snapshot);
+        view.snapshot = Some(Arc::new(snapshot));
     }
 }
 
@@ -497,7 +574,7 @@ fn finish_capture(view: &SharedView, error: Option<String>) {
     let terminal_failed = !view
         .snapshot
         .as_ref()
-        .is_some_and(|s| s["runtime"]["status"].as_str() == Some("stopped"));
+        .is_some_and(|s| s.status == "stopped");
     view.error = error.or_else(|| {
         terminal_failed
             .then(|| "Capture shutdown was incomplete. Check the recording before using it.".into())
@@ -669,6 +746,87 @@ mod tests {
         }
     }
 
+    #[test]
+    fn raw_snapshots_validate_structure_and_preserve_additive_fields() {
+        for connections in ["null", "{}", "\"[]\"", "[invalid]", "[1,]"] {
+            let line = format!(
+                r#"{{"schema_version":1,"type":"snapshot","connections":{connections},"runtime":{{"status":"running"}}}}"#
+            );
+            assert!(decode_snapshot(line.as_bytes()).is_err());
+        }
+        let line = r#"{"schema_version":1,"type":"snapshot","connections":[{"future":{"text":"hello 🦀","counter":18446744073709551615}}],"runtime":{"status":"running","capture_error":null},"additive":[true,null]}"#;
+        let snapshot = Arc::new(decode_snapshot(line.as_bytes()).unwrap());
+        assert_eq!(serde_json::to_string(&snapshot).unwrap(), line);
+        let view = CaptureView {
+            snapshot: Some(snapshot.clone()),
+            ..CaptureView::default()
+        };
+        let copy = view.update(None, true).unwrap();
+        assert!(Arc::ptr_eq(copy.snapshot.as_ref().unwrap(), &snapshot));
+        assert!(view.update(None, false).unwrap().snapshot.is_none());
+    }
+
+    #[test]
+    fn conditional_views_include_status_changes_without_a_new_snapshot() {
+        let mut view = CaptureView::default();
+        let known = view.cursor();
+        assert!(view.update(Some(&known), true).is_none());
+        assert!(view.update(Some(&known), false).is_none());
+        view.status = "stopping".into();
+        assert!(view.update(Some(&known), true).is_some());
+        let known = view.cursor();
+        view.error = Some("Capture shutdown failed".into());
+        assert!(view.update(Some(&known), false).is_some());
+        let known = view.cursor();
+        view.session += 1;
+        assert!(view.update(Some(&known), true).is_some());
+        let known = view.cursor();
+        view.revision += 1;
+        assert!(view.update(Some(&known), true).is_some());
+        assert!(view.update(Some(&known), false).is_none());
+    }
+
+    // Supporting benchmark for the JSON hot path observed in a live stack sample.
+    #[test]
+    #[ignore = "manual bridge benchmark; run with --ignored --nocapture"]
+    fn benchmark_snapshot_bridge() {
+        use std::{hint::black_box, time::Instant};
+        let connection = serde_json::json!({
+            "id": "connection-123", "historic": true,
+            "local": { "ip": "192.0.2.1", "port": 54321 },
+            "remote": { "ip": "198.51.100.2", "port": 443 },
+            "process": { "pid": 123, "name": "browser", "executable": "/Applications/Browser" },
+            "traffic": { "bytes_received": 123456789, "bytes_sent": 9876543 },
+            "protocol_details": [{ "label": "Server name", "value": "example.org", "warning": false }],
+            "network_context": { "local_hostname": null, "remote_hostname": "example.org" }
+        });
+        let bytes = serde_json::to_vec(&serde_json::json!({
+            "schema_version": 1, "type": "snapshot", "runtime": { "status": "running" },
+            "connections": vec![connection; 2000]
+        }))
+        .unwrap();
+        let iterations = 30;
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let value: Value = serde_json::from_slice(black_box(&bytes)).unwrap();
+            let copy = black_box(&value).clone();
+            black_box(serde_json::to_vec(&copy).unwrap());
+        }
+        let before = start.elapsed();
+        let start = Instant::now();
+        for _ in 0..iterations {
+            let value = Arc::new(decode_snapshot(black_box(&bytes)).unwrap());
+            let copy = black_box(&value).clone();
+            black_box(serde_json::to_vec(&copy).unwrap());
+        }
+        let after = start.elapsed();
+        eprintln!(
+            "{} bytes, {iterations} iterations: JSON tree {before:?}, raw snapshot {after:?}, {:.1}x faster",
+            bytes.len(),
+            before.as_secs_f64() / after.as_secs_f64()
+        );
+    }
+
     #[tokio::test]
     async fn snapshots_replace_each_other_and_preserve_stop_requests() {
         let view = Arc::new(Mutex::new(CaptureView {
@@ -686,7 +844,7 @@ mod tests {
         assert_eq!(view.revision, 2);
         assert_eq!(view.status, "stopping");
         assert_eq!(
-            view.snapshot.as_ref().unwrap()["connections"],
+            serde_json::to_value(view.snapshot.as_ref().unwrap()).unwrap()["connections"],
             serde_json::json!([])
         );
     }
@@ -793,10 +951,7 @@ mod tests {
         assert_eq!(view.status, "stopped");
         assert_eq!(view.revision, 2);
         assert!(view.error.is_none());
-        assert_eq!(
-            view.snapshot.as_ref().unwrap()["runtime"]["status"],
-            "stopped"
-        );
+        assert_eq!(view.snapshot.as_ref().unwrap().status, "stopped");
     }
 
     #[cfg(unix)]
