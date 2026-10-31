@@ -302,11 +302,14 @@ provide Tauri's notarization credentials (`APPLE_ID`, `APPLE_PASSWORD`, and
 See [Tauri's signing and notarization guide](https://v2.tauri.app/distribute/sign/macos/).
 Both sidecars and the app must retain their identifiers and use the same Team ID.
 Unsigned/ad-hoc bundles compile but cannot enable the privileged helper.
-`test:application-icons` checks native icons on macOS and Linux. Linux requires
+`test:application-icons` checks native icons on macOS, Linux, and Windows. Linux requires
 `xvfb`, `xauth`, and the SVG loader (`librsvg2-common` on Debian/Ubuntu).
 Development builds resolve Linux icons from installed desktop entries and the
 active GTK theme. Apps launched through Flatpak, Snap, or shell wrappers may
 retain placeholders when their executable cannot be matched reliably.
+Development builds on Windows extract icons from executable files, resolving
+process paths by PID when needed. Inaccessible processes and files without an
+embedded icon retain placeholders.
 
 `test:macos-helper` runs unprivileged broker/descriptor tests on macOS and skips
 other platforms; it does not install a daemon. Signed integration validation

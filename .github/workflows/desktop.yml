@@ -89,6 +89,24 @@ jobs:
       - run: cargo install cargo-audit --locked
       - run: cargo audit --file src-tauri/Cargo.lock
 
+  windows-icons:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      # Icon tests do not launch or bundle the capture engine.
+      TAURI_CONFIG: '{"bundle":{"externalBin":[]}}'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: src-tauri -> target
+          save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+      - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - run: node scripts/test-application-icons.mjs
+
   macos-helper:
     runs-on: macos-latest
     timeout-minutes: 45
