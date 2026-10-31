@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { cleanEnvironment, sandboxRun, toolchain } from "./build-sandbox.mjs";
-import { snapshot } from "./isolated-build.mjs";
+import { existingDebugBuild, snapshot } from "./isolated-build.mjs";
 import { sudoSession } from "./sudo-session.mjs";
 
 test("authentication and launch happen only after a successful build", async () => {
@@ -38,6 +39,58 @@ test("build environment does not inherit credentials or executable hooks", () =>
   for (const name of ["SSH_AUTH_SOCK", "GH_TOKEN", "NODE_OPTIONS", "RUSTC_WRAPPER", "SUDO_UID", "RUSTNET_DEV_SUDO"]) assert.equal(env[name], undefined);
   assert.equal(env.CARGO_NET_OFFLINE, "true");
   assert.equal(env.HOME, "/private/build/home");
+});
+
+test("existing debug builds are validated before authentication and stay locked until exit", async () => {
+  const workspace = realpathSync(mkdtempSync(path.join(tmpdir(), "rustnet-existing-")));
+  const directory = path.join(workspace, ".isolated-build/target/debug");
+  const desktop = path.join(directory, "rustnet-desktop");
+  const engine = path.join(directory, "rustnet-capture-engine");
+  const lock = path.join(workspace, ".isolated-build.lock");
+  const steps = [];
+  const build = (options) => existingDebugBuild({ ...options, workspace });
+  const authenticate = () => { assert.ok(existsSync(lock)); steps.push("authenticate"); };
+  const launch = async (executable) => {
+    assert.equal(executable, desktop);
+    assert.ok(existsSync(lock));
+    await assert.rejects(build({}), /EEXIST/);
+    steps.push("launch");
+  };
+  const run = () => sudoSession({ build, authenticate, launch });
+  try {
+    mkdirSync(directory, { recursive: true });
+    await assert.rejects(run(), /without --no-build first/);
+    writeFileSync(desktop, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
+    await assert.rejects(run(), /rustnet-capture-engine/);
+    symlinkSync(desktop, engine);
+    await assert.rejects(run(), /invalid debug executable/);
+    rmSync(engine);
+    writeFileSync(engine, "#!/bin/sh\nexit 0\n", { mode: 0o600 });
+    await assert.rejects(run(), /invalid debug executable/);
+    assert.deepEqual(steps, []);
+    assert.equal(existsSync(lock), false);
+    chmodSync(engine, 0o700);
+    await run(); // No Git checkout, package manager, compiler, or tests required.
+    assert.deepEqual(steps, ["authenticate", "launch"]);
+    assert.equal(existsSync(lock), false);
+    steps.length = 0;
+    await assert.rejects(sudoSession({ build, authenticate: () => { throw new Error("auth failed"); }, launch }), /auth failed/);
+    assert.deepEqual(steps, []);
+    assert.equal(existsSync(lock), false);
+    await assert.rejects(sudoSession({ build, authenticate, launch: () => { throw new Error("launch failed"); } }), /launch failed/);
+    assert.equal(existsSync(lock), false);
+    steps.length = 0;
+    mkdirSync(lock);
+    await assert.rejects(run(), /EEXIST/);
+    assert.deepEqual(steps, []);
+    assert.ok(existsSync(lock)); // Never remove another session's lock.
+  } finally { rmSync(workspace, { recursive: true, force: true }); }
+});
+
+test("sudo launcher documents its flag and rejects unknown options before launch", () => {
+  const script = fileURLToPath(new URL("./desktop-sudo.mjs", import.meta.url));
+  assert.match(execFileSync(process.execPath, [script, "--help"], { encoding: "utf8" }), /\[--no-build\]/);
+  assert.throws(() => execFileSync(process.execPath, [script, "--no-buid"], { stdio: "pipe" }), (error) => error.status === 1 && error.stderr.toString().includes("Usage:"));
 });
 
 test("source snapshot includes edits but rejects external symlinks", () => {

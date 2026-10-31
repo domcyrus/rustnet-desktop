@@ -117,6 +117,8 @@ Git 状態の変更は行いません。`RUSTNET_DESKTOP_ENGINE` で既存の互
 node scripts/desktop-sudo.mjs
 ```
 
+既存の debug ビルドで認証して起動し、ビルドとテストを省略するには `node scripts/desktop-sudo.mjs --no-build` を実行します。ソースや依存関係を変更した場合は再ビルドしてください。
+
 隔離されたオフラインの debug ビルドとテストを完了してから sudo 認証を要求します。
 その後はリソースを内蔵したデスクトップを直接起動し、開発サーバーやビルド監視は使いません。
 **Automatic** を選んで開始してください。sudo を使うのはエンジンだけで、UI は通常ユーザーのままです。

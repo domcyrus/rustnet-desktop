@@ -11,6 +11,7 @@
 - Simplify desktop capture state, traffic histories, and shared UI components; remove obsolete styles and unreachable UI. (#5)
 
 ### Added
+- Add `desktop:sudo --no-build` to authenticate and launch existing debug artifacts without rebuilding or running tests.
 - Add isolated dependency fetching and offline builds on macOS/Linux; authenticate sudo only after a successful debug build and launch embedded assets without a watcher or credential refresh timer.
 - Add macOS debug-only sudo capture via `pnpm run desktop:sudo`, with terminal authentication, an unprivileged UI, and strict engine sandboxing.
 - Add an opt-in macOS 13+ SMAppService capture helper for PKTAP, authenticated XPC, descriptor-only file access, and approval/removal controls. Activation requires a signed, notarized build.

@@ -1,10 +1,39 @@
 import { execFileSync } from "node:child_process";
-import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { accessSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { sandboxRun, toolchain } from "./build-sandbox.mjs";
 
 export const repository = fileURLToPath(new URL("..", import.meta.url));
+
+async function withBuildLock(workspace, action) {
+  // Outside the sandbox's writable root, so build scripts cannot unlock it.
+  const lock = path.join(realpathSync(workspace), ".isolated-build.lock");
+  mkdirSync(lock); // Reject concurrent builds, including an authenticated session.
+  try {
+    return await action();
+  } finally {
+    rmSync(lock, { recursive: true, force: true });
+  }
+}
+
+export async function existingDebugBuild({ afterBuild, workspace = repository } = {}) {
+  return withBuildLock(workspace, async () => {
+    const directory = path.join(realpathSync(workspace), ".isolated-build/target/debug");
+    const executable = path.join(directory, "rustnet-desktop");
+    for (const name of ["rustnet-desktop", "rustnet-capture-engine"]) {
+      const file = path.join(directory, name);
+      try {
+        if (!lstatSync(file).isFile() || realpathSync(file) !== file) throw new Error("Invalid executable");
+        accessSync(file, constants.X_OK);
+      } catch {
+        throw new Error(`Missing or invalid debug executable: ${file}. Run node scripts/desktop-sudo.mjs without --no-build first.`);
+      }
+    }
+    if (afterBuild) await afterBuild(executable);
+    return executable;
+  });
+}
 
 export function snapshot(source, destination) {
   const names = execFileSync("git", ["ls-files", "-z", "--cached"], { cwd: source }).toString().split("\0").filter(Boolean);
@@ -30,10 +59,7 @@ export async function isolatedBuild({ profile = "debug", phase = "all", afterBui
     if (existsSync(directory) && !lstatSync(directory).isDirectory()) throw new Error(`Unsafe isolation directory: ${directory}`);
     mkdirSync(directory, { recursive: true, mode: 0o700 });
   }
-  // Outside the sandbox's writable root, so build scripts cannot unlock it.
-  const lock = path.join(realpathSync(repository), ".isolated-build.lock");
-  mkdirSync(lock); // Reject concurrent builds, including an authenticated session.
-  try {
+  return withBuildLock(repository, async () => {
     const tools = toolchain();
     const latest = path.join(cache, "latest-run");
     // Each run gets a new root. An older sandbox cannot race this host-side
@@ -59,9 +85,7 @@ export async function isolatedBuild({ profile = "debug", phase = "all", afterBui
       if (afterBuild) await afterBuild(executable);
       return executable;
     }
-  } finally {
-    rmSync(lock, { recursive: true, force: true });
-  }
+  });
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
