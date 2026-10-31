@@ -6,6 +6,11 @@ A Tauri 2 desktop frontend for the RustNet capture engine. The application explo
 connection table, inspector, and traffic charts consume real version 1 headless
 snapshots. No sample traffic is used by the application.
 
+## Roadmap
+
+We would like to provide signed binaries for macOS and Windows, including macOS
+notarization. This will require funding to cover code-signing costs.
+
 ## Develop
 
 Install Rust, Node.js 22.22.2+ or 24.15.0+ LTS, the existing RustNet build
@@ -155,96 +160,62 @@ further workarounds. Black areas alone do not establish the exact cause.
 
 ## Views and recording
 
-- The inspector exposes engine service/VLAN and scope information, packet totals,
-  process ancestry, parent PID, user/group, container/Kubernetes metadata, hostnames,
-  observed neighbor MACs, GeoIP and captured-DNS attribution. Protocol fields share
-  their definitions with the TUI, including TLS/SNI/ALPN and cipher suites. Transport
-  health shows RTT, TCP counters/windows and protocol-specific request outcomes.
-  Unknown window scaling is labeled as raw; missing observations remain unavailable.
-  On Linux, validated startup matches can retain executable paths captured before
-  sandboxing; newly started or inaccessible processes may still lack paths.
-  Rebuild the bundled engine and restart capture to receive the new metadata.
-
-- The header, All traffic, application lists/details and connection rates use the same two-second window over active connection byte counters. Their live rates agree, including Unattributed traffic. Newly observed existing flows establish a baseline before reporting rates; closed connections leave the live sum. Coverage and overall session totals remain separate original-frame measurements, so their byte totals can differ from connection counters. **Log scale** reveals small flows alongside large bursts.
-- Live rates use a two-second moving average; **Show raw peaks** reveals interval rates. Graphs show the actual sample count, retain up to 121 points over 60 seconds, and skip near-simultaneous updates without losing byte deltas. Invalid bridge snapshots keep the last valid view and the error clears after recovery.
-- Applications opens on **All traffic**, with the overall graph, tracked download/upload
-  session totals, connection/application/host counts, and capture coverage. Select an
-  application for its details and All traffic to return. The overview is no longer
-  under Connections. **Show breakdown graph** compares captured and attributed rates.
-- Coverage counts original captured frame lengths, including link-layer headers:
-  attributed application bytes, tracked bytes with unknown applications, and bytes
-  outside tracked connections. Ownership is recorded at packet processing time,
-  without retroactive reassignment. Totals survive connection expiry. The outside
-  gap includes pending processing, skipped packets and queue drops; it can shrink
-  as the queue drains. Packets never delivered by the backend cannot be measured
-  in bytes. VPN/all-interface capture may observe traffic more than once.
-  These counters differ from per-application connection byte totals. Rebuild the
-  engine and restart capture to enable coverage; older engines show an explanation.
-- Click an application for its traffic overview; double-click it to open Connections
-  filtered to that application group. Clear filter returns to all applications.
-  The filter includes matching retained history and follows Back/Forward navigation.
-- Connections uses one scrollable table without pagination. Click anywhere in a row
-  to inspect it; double-click to open expanded details. Double-clicking a destination
-  under an application also opens expanded connection details directly.
-- Applications and connections start in alphabetical order; rates update in place.
-  Click the download/upload column heading to sort connections by current rate,
-  or the application's Download rate heading to rank applications. Rate sorting is live.
-- Application details show total downloaded/uploaded bytes across active and retained
-  closed connections. These totals can decrease when old connections are evicted;
-  they are not lifetime or complete session counters. Hosts counts unique remote IPs
-  across active connections, ignoring port differences.
-- Dropdowns follow the appearance theme. Use arrows, Home/End, or type a label prefix
-  to navigate; Enter selects, Escape cancels, and Tab closes the menu.
-- Capture settings open from the source button beside capture status. Linux defaults
-  to **All interfaces (any)** when available and no preference has been saved.
-  **Automatic** and explicit interface choices remain available. On macOS,
-  Automatic attempts PKTAP when the capture helper is enabled.
-  Existing choices, including Automatic, are preserved. Missing saved interfaces
-  require choosing a replacement. During capture, **Apply and restart capture**
-  stops the old session cleanly before starting the new one; recording uses a new file.
-- The connection inspector has independently scrolling Overview, Process, and Protocol
-  details. Drag its divider or use Left/Right arrows to resize it. **Expand** opens a
-  focused view; smaller windows show details in place of the list. Close details or
-  press Escape to return with filters preserved.
-- Wide inspectors show Overview, Process, and Protocol together; compact inspectors use tabs.
-- Mouse Back/Forward and Alt+Left/Right restore earlier views and selections.
-- Sandbox status and packet counters appear above Capture Source in the sidebar.
-- Inspector width is saved locally. Live rate values stay on one line in fixed-width
-  summary slots so changing traffic does not shift the layout.
-- Applications are grouped by process name, with contributing PIDs. Missing executable
-  paths do not split a group or reset its graph when a path arrives. Distinct known
-  executables with the same name remain separate and show their paths. If several
-  paths exist, missing paths join a known live PID only when unambiguous; otherwise
-  they remain in an executable-unavailable group.
-- Connections can be searched by process, PID, hostname, IP, port, or protocol,
-  sorted by traffic or name, and inspected without losing identity on refresh.
-  Search is a local word search, not the TUI filter expression language.
-- The desktop requests retained history from the engine with `--include-historic`;
-  the History button filters visibility locally, so its count remains available when hidden.
-- **History** (`t`) shows retained historic connections. Historic rates are excluded
-  from live totals. These totals cover active tracked connections, not all interface
-  bytes or traffic outside capture visibility.
-- Charts keep at most 60 seconds of observed samples. Every application retains history
-  throughout capture, so switching applications shows existing samples immediately.
-  A new capture session starts fresh. **Freeze view** freezes displayed
-  data while capture and recording continue.
-- A dot beside the capture source indicates live capture. Open the source control
-  for capture settings and **Stop capture**. **Freeze view** remains directly accessible.
-- Select **Record PCAPNG** before starting. A native save dialog chooses the
-  destination; choose an unused filename. Recording starts with capture, is not
-  retroactive, and uses the engine's annotated PCAPNG exporter. Stop capture to
-  flush it. Export errors and dropped export records indicate incomplete output.
-- Appearance, preferred view, and the last successfully requested interface are
-  stored locally. Traffic snapshots are not persisted by the UI.
-- In Connections, `g`/`G` select the first/last row and `Ctrl+f`/`Ctrl+b` move a page
-  down/up, following the current filter and sort. Shortcuts do not intercept text fields or dropdowns.
-- **Help** in the sidebar or `h` opens guidance for the current view, with relevant
-  shortcuts and explanations. Capture settings and the inspector have their own help.
-- Idle connections follow the engine cleanup clock: after half the timeout, context
-  columns gently fade and a countdown shows time to history. Nonzero rates and selected
-  rows stay readable. Reduced-motion settings disable transitions. Older bundled engines
-  still support history; rebuild the engine to enable cleanup timing.
-- `/` focuses connection search; Escape closes the inspector or appearance panel.
+- **Applications** opens on **All traffic**, showing the overall graph, tracked
+  session totals, connection/application/host counts, and capture coverage. Click
+  an application for details; double-click to filter Connections to that group,
+  including matching retained history. **Clear filter** returns to all applications.
+- **Connections** is a continuous, searchable table. Search by process, PID,
+  hostname, IP, port, or protocol using words, not TUI filter expressions.
+  Applications and connections default to name order; click rate headings for live
+  rate sorting. Click a connection to inspect it or double-click to expand details.
+- The inspector shows process ancestry, user/group, container metadata, service/VLAN,
+  hostnames, GeoIP, DNS, TLS and transport health. Missing observations remain
+  unavailable. Linux executable paths may be retained from startup, but newly
+  started or inaccessible processes may lack them.
+- Drag the inspector divider or use Left/Right arrows to resize it. Wide inspectors
+  show Overview, Process and Protocol together; compact ones use tabs. **Expand**
+  opens focused details. Close or press Escape to return with filters preserved.
+- Live rates use the same two-second moving average across views, including
+  Unattributed traffic. Newly observed existing flows establish a baseline;
+  closed connections leave the live sum. **Show raw peaks** reveals interval rates,
+  and **Log scale** makes small flows visible alongside bursts. Invalid snapshots
+  keep the last valid view until recovery.
+- Charts retain up to 121 samples over 60 seconds for every application, including
+  while viewing another application. A new capture resets them. **Freeze view**
+  pauses only the display; capture and recording continue.
+- **Show breakdown graph** compares captured and attributed rates. Coverage counts
+  original frame lengths, including link-layer headers, split into attributed,
+  tracked but unattributed, and outside tracked connections. Attribution is fixed
+  at packet processing time, and totals survive connection expiry. The outside gap
+  includes pending processing, skipped packets and queue drops, and may shrink as
+  the queue drains. Undelivered packets cannot be measured; VPN/all-interface
+  capture may count traffic twice. Coverage totals differ from connection counters.
+- Application byte totals include active and retained closed connections and may
+  decrease as history expires; they are not complete session totals. **Hosts**
+  counts unique remote IPs across active connections, regardless of port.
+  Applications group by process name and distinguish known executable paths;
+  ambiguous missing paths remain in an executable-unavailable group.
+- Open capture settings from the source button beside capture status. Linux
+  defaults to **All interfaces (any)** when available and no preference is saved.
+  On macOS, **Automatic** attempts PKTAP with the helper enabled. Missing saved
+  interfaces require a replacement. **Apply and restart capture** stops the old
+  session cleanly; recording requires a new file. **Stop capture** is also here.
+- **History** (`t`) toggles retained closed connections locally; its count remains
+  visible when hidden. Historic rates are excluded from live totals, which cover
+  active tracked connections only. Idle connections fade and show a countdown to
+  history when supported by the engine; selected and active rows stay readable.
+- Select **Record PCAPNG** before capture and choose an unused filename in the save
+  dialog. Recording uses the engine's annotated exporter and is not retroactive.
+  Stop capture to flush output; export errors or dropped records mean it may be incomplete.
+- Appearance, preferred view, inspector width and the last successfully requested
+  interface are saved locally. Traffic snapshots are not persisted by the UI.
+  Sandbox status and packet counters appear above Capture Source in the sidebar.
+- Mouse Back/Forward and Alt+Left/Right restore views and selections. In Connections,
+  `/` focuses search, `g`/`G` select the first/last row, and `Ctrl+f`/`Ctrl+b` move
+  down/up a page. Shortcuts respect the current filter and sort and do not intercept
+  text fields or dropdowns. Escape closes the inspector or appearance panel.
+- **Help** in the sidebar or `h` explains the current view and its shortcuts.
+  Capture settings and the inspector also have their own help.
 
 ## Process boundary
 
