@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Changed
+- Cache unchanged historic connection JSON in the capture engine, including extended metadata, with bounded retention and unchanged snapshot output.
 - Reduce snapshot processing with shared raw JSON and conditional polling; frozen or hidden views fetch only capture status and resume from the latest snapshot.
 - Reset selection before displaying a new capture session so the reset cannot overwrite the first application click.
 - Update frontend dependencies and support TypeScript 7 CSS imports while keeping the Tauri API aligned with Rust. Require Node.js 22.22.2+ or 24.15.0+ LTS. (#8)

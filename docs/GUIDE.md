@@ -249,6 +249,8 @@ and execute that protected copy; debug engine overrides are rejected. Recording
 files are created exclusively by the regular user. User GeoIP discovery is
 resolved by the app before descriptors cross the privilege boundary.
 
+The bundled engine also reuses encoded JSON for unchanged historic connections, including extended details. The cache retains up to 10,000 records and 16 MiB of encoded JSON, plus their projected fields and bookkeeping. Late metadata and final counters still update. Full snapshots are still built and sent, so this reduces repeated encoding work but does not make CPU use independent of history size.
+
 The bridge retains the latest validated snapshot as shared raw JSON, caps individual
 records at 16 MiB, and bounds diagnostic output. It forwards JSON without rebuilding
 or deep-copying its connection tree. The UI polls every 500 ms with a cursor;

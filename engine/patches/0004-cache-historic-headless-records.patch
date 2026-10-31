@@ -1,0 +1,870 @@
+diff --git a/Cargo.toml b/Cargo.toml
+index f7796c5..61999f9 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -90,8 +90,8 @@ clap.workspace = true
+ simplelog = "0.12"
+ chrono = "0.4"
+ ratatui = { version = "0.30", features = ["all-widgets", "unstable-rendered-line-info"] }
+-serde = { version = "1.0", features = ["derive"] }
+-serde_json = "1.0"
++serde = { version = "1.0", features = ["derive", "rc"] }
++serde_json = { version = "1.0", features = ["raw_value"] }
+ toml = "1.1"
+ # Note: dns-lookup, ring, aes, flate2, and maxminddb moved to rustnet-core,
+ # which is the only place they are used. They are re-exported transitively
+diff --git a/src/connection_details.rs b/src/connection_details.rs
+index 6f5b872..bee77ec 100644
+--- a/src/connection_details.rs
++++ b/src/connection_details.rs
+@@ -2,7 +2,7 @@
+ use crate::network::types::{Connection, HttpInfo, ProtocolState};
+ use serde::Serialize;
+ 
+-#[derive(Serialize)]
++#[derive(PartialEq, Serialize)]
+ pub(crate) struct DetailField {
+     pub label: &'static str,
+     pub value: Option<String>,
+diff --git a/src/headless/mod.rs b/src/headless/mod.rs
+index cb658a6..2cd4306 100644
+--- a/src/headless/mod.rs
++++ b/src/headless/mod.rs
+@@ -17,7 +17,7 @@ mod output;
+ mod schema;
+ 
+ use output::AsyncOutput;
+-use schema::{RuntimePhase, SnapshotEnvelope};
++use schema::{ConnectionCache, RuntimePhase, SnapshotEnvelope};
+ 
+ #[cfg(test)]
+ mod tests;
+@@ -155,13 +155,15 @@ fn run_with_writer_deadline<W: Write + Send + 'static>(
+     writer_deadline: Duration,
+ ) -> Result<StopReport> {
+     app.set_show_historic(options.include_historic);
+-    let mut output = match AsyncOutput::spawn(writer) {
+-        Ok(output) => output,
+-        Err(error) => {
+-            let _ = app.stop();
+-            return Err(error).context("failed to start headless output writer");
+-        }
+-    };
++    let mut cache = ConnectionCache::default();
++    let mut output =
++        match AsyncOutput::spawn_with_serializer(writer, move |value| cache.serialize(value)) {
++            Ok(output) => output,
++            Err(error) => {
++                let _ = app.stop();
++                return Err(error).context("failed to start headless output writer");
++            }
++        };
+     let started = Instant::now();
+     let poll_interval = app
+         .snapshot_refresh_interval()
+diff --git a/src/headless/output.rs b/src/headless/output.rs
+index c4ad1db..99ed1d4 100644
+--- a/src/headless/output.rs
++++ b/src/headless/output.rs
+@@ -31,7 +31,16 @@ pub(super) struct AsyncOutput<T> {
+ }
+ 
+ impl<T: Serialize + Send + 'static> AsyncOutput<T> {
+-    pub(super) fn spawn<W: Write + Send + 'static>(mut writer: W) -> io::Result<Self> {
++    #[cfg(test)]
++    pub(super) fn spawn<W: Write + Send + 'static>(writer: W) -> io::Result<Self> {
++        Self::spawn_with_serializer(writer, |value| serialize_record(&value))
++    }
++
++    pub(super) fn spawn_with_serializer<W, S>(mut writer: W, mut serialize: S) -> io::Result<Self>
++    where
++        W: Write + Send + 'static,
++        S: FnMut(T) -> Result<Vec<u8>> + Send + 'static,
++    {
+         let (records_tx, records_rx) = bounded::<OutputRecord<T>>(1);
+         let pending_rx = records_rx.clone();
+         let (status_tx, status_rx) = bounded(1);
+@@ -43,13 +52,12 @@ impl<T: Serialize + Send + 'static> AsyncOutput<T> {
+                         Ok(record) => record,
+                         Err(_) => break WriterStatus::Finished,
+                     };
+-                    let bytes = match serialize_record(&value) {
++                    let bytes = match serialize(value) {
+                         Ok(bytes) => bytes,
+                         Err(error) => break WriterStatus::Failed(format!("{error:#}")),
+                     };
+-                    // Release the projected value before a potentially blocked
+-                    // write, retaining only this record's serialized bytes.
+-                    drop(value);
++                    // Serialization consumes the projected value before a
++                    // potentially blocked write. Any serializer cache is bounded.
+                     if let Err(error) = writer.write_all(&bytes).and_then(|()| writer.flush()) {
+                         break if error.kind() == io::ErrorKind::BrokenPipe {
+                             WriterStatus::BrokenPipe
+diff --git a/src/headless/schema.rs b/src/headless/schema.rs
+index b92e1f8..2b767dc 100644
+--- a/src/headless/schema.rs
++++ b/src/headless/schema.rs
+@@ -1,10 +1,12 @@
+ //! Versioned wire schema, independent of application internals.
+ 
++use std::sync::Arc;
+ use std::sync::atomic::Ordering;
+ use std::time::{Duration, SystemTime};
+ 
+ use chrono::{DateTime, SecondsFormat, Utc};
+ use serde::Serialize;
++use serde_json::value::RawValue;
+ 
+ use crate::app::{App, AppStats, StopReport};
+ use crate::network::types::{AttributionSource, Connection, ConnectionKey};
+@@ -12,7 +14,7 @@ use crate::network::types::{AttributionSource, Connection, ConnectionKey};
+ use super::{SCHEMA_VERSION, TerminationReason};
+ 
+ #[derive(Serialize)]
+-pub(super) struct SnapshotEnvelope {
++pub(super) struct SnapshotEnvelope<C = ConnectionSnapshots> {
+     schema_version: u8,
+     #[serde(rename = "type")]
+     record_type: &'static str,
+@@ -22,10 +24,24 @@ pub(super) struct SnapshotEnvelope {
+     stats: StatsSnapshot,
+     filter: Option<String>,
+     connection_count: usize,
+-    connections: ConnectionSnapshots,
++    connections: C,
+ }
+ 
+ impl SnapshotEnvelope {
++    fn with_connections<C>(self, connections: C) -> SnapshotEnvelope<C> {
++        SnapshotEnvelope {
++            schema_version: self.schema_version,
++            record_type: self.record_type,
++            timestamp: self.timestamp,
++            runtime: self.runtime,
++            sandbox: self.sandbox,
++            stats: self.stats,
++            filter: self.filter,
++            connection_count: self.connection_count,
++            connections,
++        }
++    }
++
+     pub(super) fn new(
+         app: &App,
+         filter_query: Option<&str>,
+@@ -97,6 +113,135 @@ impl SnapshotEnvelope {
+     }
+ }
+ 
++// Cache only the immediately preceding emitted snapshot. Both limits bound the
++// extra retained state independently of the tracker's connection configuration.
++const MAX_CACHED_CONNECTIONS: usize = 10_000;
++const MAX_CACHED_JSON_BYTES: usize = 16 * 1024 * 1024;
++
++#[derive(Serialize)]
++#[serde(untagged)]
++enum EncodedConnection<T> {
++    Cached(Arc<RawValue>),
++    Direct(Box<T>),
++}
++
++struct CachedConnection<T> {
++    projected: T,
++    json: Arc<RawValue>,
++}
++
++#[derive(Default)]
++pub(super) struct ConnectionCache {
++    basic: RecordCache<ConnectionSnapshot>,
++    full: RecordCache<FullConnectionSnapshot>,
++}
++
++impl ConnectionCache {
++    pub(super) fn serialize(&mut self, snapshot: SnapshotEnvelope) -> anyhow::Result<Vec<u8>> {
++        self.serialize_with_limits(snapshot, MAX_CACHED_CONNECTIONS, MAX_CACHED_JSON_BYTES)
++    }
++
++    fn serialize_with_limits(
++        &mut self,
++        mut snapshot: SnapshotEnvelope,
++        max_connections: usize,
++        max_bytes: usize,
++    ) -> anyhow::Result<Vec<u8>> {
++        let has_history = match &snapshot.connections {
++            ConnectionSnapshots::Basic(records) => {
++                records.iter().any(CacheableConnection::historic)
++            }
++            ConnectionSnapshots::Full(records) => records.iter().any(CacheableConnection::historic),
++        };
++        if !has_history {
++            self.basic.entries.clear();
++            self.full.entries.clear();
++            return super::output::serialize_record(&snapshot);
++        }
++        let records = std::mem::replace(
++            &mut snapshot.connections,
++            ConnectionSnapshots::Basic(Vec::new()),
++        );
++        match records {
++            ConnectionSnapshots::Basic(records) => {
++                self.full.entries.clear();
++                let encoded = self.basic.encode(records, max_connections, max_bytes)?;
++                super::output::serialize_record(&snapshot.with_connections(encoded))
++            }
++            ConnectionSnapshots::Full(records) => {
++                self.basic.entries.clear();
++                let encoded = self.full.encode(records, max_connections, max_bytes)?;
++                super::output::serialize_record(&snapshot.with_connections(encoded))
++            }
++        }
++    }
++}
++
++struct RecordCache<T> {
++    entries: Vec<CachedConnection<T>>,
++}
++impl<T> Default for RecordCache<T> {
++    fn default() -> Self {
++        Self {
++            entries: Vec::new(),
++        }
++    }
++}
++impl<T: CacheableConnection> RecordCache<T> {
++    fn encode(
++        &mut self,
++        connections: Vec<T>,
++        max_connections: usize,
++        max_bytes: usize,
++    ) -> anyhow::Result<Vec<EncodedConnection<T>>> {
++        let mut previous = std::mem::take(&mut self.entries).into_iter().peekable();
++        let mut next = Vec::with_capacity(previous.len().min(max_connections));
++        let mut cached_bytes = 0;
++        let mut encoded = Vec::with_capacity(connections.len());
++        for projected in connections {
++            // Active records usually change every tick. Serialize them directly
++            // to avoid allocating a separate JSON buffer for each connection.
++            if !projected.historic() {
++                encoded.push(EncodedConnection::Direct(Box::new(projected)));
++                continue;
++            }
++            // Both snapshots are sorted by ID. A merge avoids rebuilding a hash
++            // table and duplicating connection IDs for each emitted snapshot.
++            while previous
++                .peek()
++                .is_some_and(|entry| entry.projected.id() < projected.id())
++            {
++                previous.next();
++            }
++            let matching = if previous
++                .peek()
++                .is_some_and(|entry| entry.projected.id() == projected.id())
++            {
++                previous.next()
++            } else {
++                None
++            };
++            // Compare the entire wire projection: enrichment can still change
++            // retained records after closure, without any traffic changes.
++            let cached = match matching {
++                Some(previous) if previous.projected == projected => previous,
++                _ => CachedConnection {
++                    json: Arc::from(serde_json::value::to_raw_value(&projected)?),
++                    projected,
++                },
++            };
++            encoded.push(EncodedConnection::Cached(Arc::clone(&cached.json)));
++            let bytes = cached.json.get().len();
++            if next.len() < max_connections && bytes <= max_bytes - cached_bytes {
++                cached_bytes += bytes;
++                next.push(cached);
++            }
++        }
++        self.entries = next;
++        Ok(encoded)
++    }
++}
++
+ #[derive(Debug, Clone, Copy)]
+ pub(super) enum RuntimePhase {
+     Starting,
+@@ -288,13 +433,34 @@ impl StatsSnapshot {
+ 
+ #[derive(Serialize)]
+ #[serde(untagged)]
+-enum ConnectionSnapshots {
++pub(super) enum ConnectionSnapshots {
+     Basic(Vec<ConnectionSnapshot>),
+     Full(Vec<FullConnectionSnapshot>),
+ }
+ 
+-#[derive(Serialize)]
+-struct FullConnectionSnapshot {
++trait CacheableConnection: PartialEq + Serialize {
++    fn id(&self) -> &str;
++    fn historic(&self) -> bool;
++}
++impl CacheableConnection for ConnectionSnapshot {
++    fn id(&self) -> &str {
++        &self.id
++    }
++    fn historic(&self) -> bool {
++        self.historic
++    }
++}
++impl CacheableConnection for FullConnectionSnapshot {
++    fn id(&self) -> &str {
++        &self.connection.id
++    }
++    fn historic(&self) -> bool {
++        self.connection.historic
++    }
++}
++
++#[derive(PartialEq, Serialize)]
++pub(super) struct FullConnectionSnapshot {
+     #[serde(flatten)]
+     connection: ConnectionSnapshot<FullProcessSnapshot>,
+     #[serde(flatten)]
+@@ -317,8 +483,8 @@ impl FullConnectionSnapshot {
+     }
+ }
+ 
+-#[derive(Serialize)]
+-struct ConnectionSnapshot<P = ProcessSnapshot> {
++#[derive(PartialEq, Serialize)]
++pub(super) struct ConnectionSnapshot<P = ProcessSnapshot> {
+     id: String,
+     protocol: &'static str,
+     state: String,
+@@ -343,7 +509,7 @@ struct ConnectionSnapshot<P = ProcessSnapshot> {
+     closed_at: Option<String>,
+ }
+ 
+-#[derive(Serialize)]
++#[derive(PartialEq, Serialize)]
+ struct ConnectionDetailsSnapshot {
+     protocol_details: Vec<crate::connection_details::DetailField>,
+     health_details: Vec<crate::connection_details::DetailField>,
+@@ -355,7 +521,7 @@ struct ConnectionDetailsSnapshot {
+     lifecycle: Option<LifecycleSnapshot>,
+ }
+ 
+-#[derive(Serialize)]
++#[derive(PartialEq, Serialize)]
+ struct LifecycleSnapshot {
+     timeout_ms: u64,
+     remaining_ms: u64,
+@@ -588,14 +754,14 @@ impl ConnectionDetailsSnapshot {
+     }
+ }
+ 
+-#[derive(Serialize, Default)]
++#[derive(PartialEq, Serialize, Default)]
+ struct NetworkContextSnapshot {
+     local_hostname: Option<String>,
+     remote_hostname: Option<String>,
+     local_mac: Option<NeighborSnapshot>,
+     remote_mac: Option<NeighborSnapshot>,
+ }
+-#[derive(Serialize)]
++#[derive(PartialEq, Serialize)]
+ struct NeighborSnapshot {
+     mac: String,
+     vendor: Option<String>,
+@@ -608,13 +774,13 @@ impl From<crate::network::neighbors::NeighborEntry> for NeighborSnapshot {
+         }
+     }
+ }
+-#[derive(Serialize)]
++#[derive(PartialEq, Serialize)]
+ struct AttributedHostnameSnapshot {
+     name: String,
+     source: &'static str,
+     observed_at: String,
+ }
+-#[derive(Serialize)]
++#[derive(PartialEq, Serialize)]
+ struct TcpHealthSnapshot {
+     retransmits: u64,
+     out_of_order: u64,
+@@ -623,7 +789,7 @@ struct TcpHealthSnapshot {
+     local_receive_window: Option<WindowSnapshot>,
+     remote_receive_window: Option<WindowSnapshot>,
+ }
+-#[derive(Serialize)]
++#[derive(PartialEq, Serialize)]
+ struct WindowSnapshot {
+     bytes: u64,
+     scale_known: bool,
+@@ -636,7 +802,7 @@ impl From<crate::network::types::WindowSample> for WindowSnapshot {
+         }
+     }
+ }
+-#[derive(Serialize)]
++#[derive(PartialEq, Serialize)]
+ struct RequestHealthSnapshot {
+     retries: Option<u64>,
+     timeouts: Option<u64>,
+@@ -644,22 +810,22 @@ struct RequestHealthSnapshot {
+     quic_version_negotiations: u64,
+ }
+ 
+-#[derive(Serialize)]
++#[derive(PartialEq, Serialize)]
+ struct EndpointSnapshot {
+     ip: String,
+     port: u16,
+     address_kind: &'static str,
+ }
+ 
+-#[derive(Serialize)]
++#[derive(PartialEq, Serialize)]
+ struct FullProcessSnapshot {
+     #[serde(flatten)]
+     process: ProcessSnapshot,
+     user_group: Option<String>,
+ }
+ 
+-#[derive(Serialize)]
+-struct ProcessSnapshot {
++#[derive(PartialEq, Serialize)]
++pub(super) struct ProcessSnapshot {
+     pid: Option<u32>,
+     ppid: Option<u32>,
+     name: Option<String>,
+@@ -670,13 +836,13 @@ struct ProcessSnapshot {
+     lineage: Option<ProcessLineageSnapshot>,
+ }
+ 
+-#[derive(Serialize)]
++#[derive(PartialEq, Serialize)]
+ struct ProcessLineageSnapshot {
+     ancestors: Vec<ProcessAncestorSnapshot>,
+     truncated: bool,
+ }
+ 
+-#[derive(Serialize)]
++#[derive(PartialEq, Serialize)]
+ struct ProcessAncestorSnapshot {
+     pid: u32,
+     name: String,
+@@ -684,30 +850,30 @@ struct ProcessAncestorSnapshot {
+     started_at_unix_ms: Option<u64>,
+ }
+ 
+-#[derive(Serialize)]
++#[derive(PartialEq, Serialize)]
+ struct TrafficSnapshot {
+     bytes_sent: u64,
+     bytes_received: u64,
+     packets_sent: u64,
+     packets_received: u64,
+-    outgoing_bytes_per_second: Option<f64>,
+-    incoming_bytes_per_second: Option<f64>,
++    outgoing_bytes_per_second: Option<JsonFloat>,
++    incoming_bytes_per_second: Option<JsonFloat>,
+ }
+ 
+-#[derive(Serialize)]
++#[derive(PartialEq, Serialize)]
+ struct RttSnapshot {
+-    current_ms: Option<f64>,
+-    initial_ms: Option<f64>,
+-    tcp_smoothed_ms: Option<f64>,
+-    dns_response_ms: Option<f64>,
+-    llmnr_response_ms: Option<f64>,
+-    netbios_response_ms: Option<f64>,
+-    icmp_echo_ms: Option<f64>,
+-    stun_ms: Option<f64>,
+-    ntp_ms: Option<f64>,
++    current_ms: Option<JsonFloat>,
++    initial_ms: Option<JsonFloat>,
++    tcp_smoothed_ms: Option<JsonFloat>,
++    dns_response_ms: Option<JsonFloat>,
++    llmnr_response_ms: Option<JsonFloat>,
++    netbios_response_ms: Option<JsonFloat>,
++    icmp_echo_ms: Option<JsonFloat>,
++    stun_ms: Option<JsonFloat>,
++    ntp_ms: Option<JsonFloat>,
+ }
+ 
+-#[derive(Serialize)]
++#[derive(PartialEq, Serialize)]
+ struct GeoIpSnapshot {
+     country_code: Option<String>,
+     country_name: Option<String>,
+@@ -717,7 +883,7 @@ struct GeoIpSnapshot {
+     postal_code: Option<String>,
+ }
+ 
+-#[derive(Serialize)]
++#[derive(PartialEq, Serialize)]
+ struct ContainerSnapshot {
+     runtime: &'static str,
+     id: String,
+@@ -725,7 +891,7 @@ struct ContainerSnapshot {
+     cgroup_path: Option<String>,
+ }
+ 
+-#[derive(Serialize)]
++#[derive(PartialEq, Serialize)]
+ struct KubernetesSnapshot {
+     pod_uid: Option<String>,
+     pod_name: Option<String>,
+@@ -751,14 +917,29 @@ fn connection_id(connection: &Connection) -> String {
+     )
+ }
+ 
+-fn finite(value: f64) -> Option<f64> {
+-    value.is_finite().then_some(value)
++// JSON distinguishes signed zero. Compare float bits so cache reuse preserves
++// the exact encoding as well as the numeric value. Non-finite values stay null.
++#[derive(Serialize)]
++#[serde(transparent)]
++struct JsonFloat(f64);
++
++impl PartialEq for JsonFloat {
++    fn eq(&self, other: &Self) -> bool {
++        self.0.to_bits() == other.0.to_bits()
++    }
+ }
+ 
+-fn duration_ms(value: Option<Duration>) -> Option<f64> {
++fn finite(value: f64) -> Option<JsonFloat> {
++    value.is_finite().then_some(JsonFloat(value))
++}
++
++fn duration_ms(value: Option<Duration>) -> Option<JsonFloat> {
+     value.and_then(|duration| finite(duration.as_secs_f64() * 1_000.0))
+ }
+ 
++#[cfg(test)]
++mod cache_tests;
++
+ #[cfg(test)]
+ mod tests {
+     use super::*;
+diff --git a/src/headless/schema/cache_tests.rs b/src/headless/schema/cache_tests.rs
+new file mode 100644
+index 0000000..e40e280
+--- /dev/null
++++ b/src/headless/schema/cache_tests.rs
+@@ -0,0 +1,316 @@
++use super::*;
++use crate::headless::output::serialize_record;
++use crate::headless::tests::app_with_connections;
++
++fn snapshot(app: &App) -> SnapshotEnvelope {
++    let mut record = SnapshotEnvelope::new(app, None, RuntimePhase::Running, None, None, true).1;
++    for connection in record.connections.full_mut() {
++        connection.connection.historic = true;
++        connection.details.lifecycle = None;
++    }
++    record
++}
++
++fn assert_matches_uncached(cache: &mut ConnectionCache, record: SnapshotEnvelope) {
++    let expected = serialize_record(&record).unwrap();
++    assert_eq!(cache.serialize(record).unwrap(), expected);
++}
++
++#[test]
++fn unchanged_connections_reuse_json_but_envelope_stays_fresh() {
++    let app = app_with_connections();
++    let mut cache = ConnectionCache::default();
++    assert_matches_uncached(&mut cache, snapshot(&app));
++    let original = Arc::clone(&cache.full.entries[0].json);
++    let mut record = snapshot(&app);
++    record.runtime.snapshot_generation += 1;
++    record.runtime.status = "stopped";
++    record.runtime.termination_reason = Some("duration_elapsed");
++    record.stats.bytes_captured += 100;
++    assert_matches_uncached(&mut cache, record);
++    assert!(Arc::ptr_eq(&original, &cache.full.entries[0].json));
++}
++
++#[test]
++fn archived_connections_preserve_late_metadata_and_final_counters() {
++    let app = app_with_connections();
++    // Each update must invalidate independently, even when counters and
++    // last_activity are unchanged.
++    let updates: [fn(&mut ConnectionSnapshot<FullProcessSnapshot>); 6] = [
++        |connection| connection.hostname = Some("late.example".into()),
++        |connection| {
++            connection.process.as_mut().unwrap().process.name = Some("late process".into())
++        },
++        |connection| {
++            connection.geoip = Some(GeoIpSnapshot {
++                country_code: Some("CH".into()),
++                country_name: None,
++                asn: Some(64512),
++                as_org: None,
++                city: None,
++                postal_code: None,
++            })
++        },
++        |connection| connection.traffic.bytes_received += 123,
++        |connection| connection.rtt.current_ms = finite(12.5),
++        |connection| connection.closed_at = Some("2026-01-01T00:00:00Z".into()),
++    ];
++    for update in updates {
++        let mut cache = ConnectionCache::default();
++        assert_matches_uncached(&mut cache, snapshot(&app));
++        let original = Arc::clone(&cache.full.entries[0].json);
++        let mut record = snapshot(&app);
++        update(&mut record.connections.full_mut()[0].connection);
++        assert_matches_uncached(&mut cache, record);
++        assert!(!Arc::ptr_eq(&original, &cache.full.entries[0].json));
++    }
++}
++
++#[test]
++fn filtering_clearing_and_tuple_reuse_evict_old_records() {
++    let app = app_with_connections();
++    let mut cache = ConnectionCache::default();
++    assert_matches_uncached(&mut cache, snapshot(&app));
++    let original_ids: Vec<_> = cache
++        .full
++        .entries
++        .iter()
++        .map(|entry| entry.projected.connection.id.clone())
++        .collect();
++    let mut filtered = SnapshotEnvelope::new(
++        &app,
++        Some("process:curl"),
++        RuntimePhase::Running,
++        None,
++        None,
++        true,
++    )
++    .1;
++    for connection in filtered.connections.full_mut() {
++        connection.connection.historic = true;
++        connection.details.lifecycle = None;
++    }
++    assert_matches_uncached(&mut cache, filtered);
++    assert_eq!(cache.full.entries.len(), 1);
++
++    let mut connections = app.get_connections();
++    for connection in &mut connections {
++        connection.created_at += Duration::from_secs(1);
++    }
++    app.set_connections_snapshot_for_test(connections);
++    assert_matches_uncached(&mut cache, snapshot(&app));
++    assert!(original_ids.iter().all(|id| {
++        !cache
++            .full
++            .entries
++            .iter()
++            .any(|entry| &entry.projected.connection.id == id)
++    }));
++    app.set_connections_snapshot_for_test(vec![]);
++    assert_matches_uncached(&mut cache, snapshot(&app));
++    assert!(cache.full.entries.is_empty());
++}
++
++#[test]
++fn cache_limits_do_not_truncate_output() {
++    let app = app_with_connections();
++    let mut cache = ConnectionCache::default();
++    for (max_connections, max_bytes) in [(0, usize::MAX), (1, usize::MAX), (10, 1), (10, 1_500)] {
++        for _ in 0..2 {
++            let record = snapshot(&app);
++            let expected = serialize_record(&record).unwrap();
++            assert_eq!(
++                cache
++                    .serialize_with_limits(record, max_connections, max_bytes)
++                    .unwrap(),
++                expected
++            );
++            assert!(cache.full.entries.len() <= max_connections);
++            assert!(
++                cache
++                    .full
++                    .entries
++                    .iter()
++                    .map(|entry| entry.json.get().len())
++                    .sum::<usize>()
++                    <= max_bytes
++            );
++        }
++    }
++}
++
++#[test]
++fn active_connections_and_transitions_keep_full_output() {
++    let app = app_with_connections();
++    let mut cache = ConnectionCache::default();
++    assert_matches_uncached(&mut cache, snapshot(&app));
++    let mut record = snapshot(&app);
++    record.connections.full_mut()[0].connection.historic = false;
++    assert_matches_uncached(&mut cache, record);
++    assert_eq!(cache.full.entries.len(), 1);
++    let record = SnapshotEnvelope::new(&app, None, RuntimePhase::Running, None, None, true).1;
++    assert_matches_uncached(&mut cache, record);
++    assert!(cache.full.entries.is_empty());
++    assert_matches_uncached(&mut cache, snapshot(&app));
++    assert_eq!(cache.full.entries.len(), 2);
++}
++
++#[test]
++fn signed_zero_changes_preserve_the_original_encoding() {
++    let app = app_with_connections();
++    let mut cache = ConnectionCache::default();
++    for rate in [0.0, -0.0, 0.0] {
++        let mut record = snapshot(&app);
++        record.connections.full_mut()[0]
++            .connection
++            .traffic
++            .outgoing_bytes_per_second = finite(rate);
++        assert_matches_uncached(&mut cache, record);
++    }
++}
++
++// Run explicitly in release mode. Measures projection plus encoding, not capture
++// or whole-process CPU. Both paths use the same synthetic connection snapshots.
++#[test]
++#[ignore = "manual release-mode performance measurement"]
++fn benchmark_history_encoding() {
++    use std::hint::black_box;
++    use std::time::Instant;
++
++    let app = app_with_connections();
++    app.set_show_historic(true);
++    let template = app
++        .get_connections()
++        .into_iter()
++        .find(|c| c.pid.is_some())
++        .unwrap();
++    const ITERATIONS: usize = 100;
++    for (active, historic) in [(100, 0), (100, 1_000), (100, 5_000), (5_000, 0)] {
++        let connections: Vec<_> = (0..active + historic)
++            .map(|index| {
++                let mut connection = template.clone();
++                connection.local_addr.set_port(10_000 + index as u16);
++                connection.is_historic = index >= active;
++                connection.closed_at = connection.is_historic.then_some(connection.last_activity);
++                connection.current_incoming_rate_bps = 0.0;
++                connection.current_outgoing_rate_bps = 0.0;
++                connection
++            })
++            .collect();
++        app.set_connections_snapshot_for_test(connections);
++        let mut cache = ConnectionCache::default();
++        cache
++            .serialize(SnapshotEnvelope::new(&app, None, RuntimePhase::Running, None, None, true).1)
++            .unwrap();
++        let mut uncached_time = Duration::ZERO;
++        let mut cached_time = Duration::ZERO;
++        let mut payload = 0;
++        for iteration in 0..ITERATIONS {
++            // Alternate execution order to reduce systematic warm-up bias.
++            for cached in if iteration % 2 == 0 {
++                [false, true]
++            } else {
++                [true, false]
++            } {
++                let started = Instant::now();
++                let mut record =
++                    SnapshotEnvelope::new(&app, None, RuntimePhase::Running, None, None, true).1;
++                for connection in record.connections.full_mut() {
++                    let connection = &mut connection.connection;
++                    if !connection.historic {
++                        connection.traffic.bytes_sent += iteration as u64 + 1;
++                        connection.traffic.outgoing_bytes_per_second =
++                            finite(iteration as f64 + 1.0);
++                    }
++                }
++                let bytes = if cached {
++                    cache.serialize(record).unwrap()
++                } else {
++                    serialize_record(&record).unwrap()
++                };
++                payload = black_box(bytes).len();
++                if cached {
++                    cached_time += started.elapsed();
++                } else {
++                    uncached_time += started.elapsed();
++                }
++            }
++        }
++        eprintln!(
++            "active={active} historic={historic} bytes={payload} projection+encoding uncached={:.3}ms cached={:.3}ms ratio={:.2}x",
++            uncached_time.as_secs_f64() * 1_000.0 / ITERATIONS as f64,
++            cached_time.as_secs_f64() * 1_000.0 / ITERATIONS as f64,
++            uncached_time.as_secs_f64() / cached_time.as_secs_f64()
++        );
++    }
++}
++
++impl ConnectionSnapshots {
++    fn full_mut(&mut self) -> &mut Vec<FullConnectionSnapshot> {
++        match self {
++            Self::Full(records) => records,
++            Self::Basic(_) => panic!("expected full projection"),
++        }
++    }
++}
++
++#[test]
++fn full_details_invalidate_without_base_connection_changes() {
++    let app = app_with_connections();
++    let updates: [fn(&mut FullConnectionSnapshot); 5] = [
++        |value| value.details.network_context.remote_hostname = Some("late.example".into()),
++        |value| {
++            value.details.network_context.remote_mac = Some(NeighborSnapshot {
++                mac: "02:00:00:00:00:01".into(),
++                vendor: Some("test".into()),
++            })
++        },
++        |value| {
++            value
++                .details
++                .protocol_details
++                .push(crate::connection_details::DetailField {
++                    label: "test",
++                    value: Some("late".into()),
++                    warning: false,
++                })
++        },
++        |value| value.details.request_health.quic_retries += 1,
++        |value| value.connection.process.as_mut().unwrap().user_group = Some("user:group".into()),
++    ];
++    for update in updates {
++        let mut cache = ConnectionCache::default();
++        assert_matches_uncached(&mut cache, snapshot(&app));
++        let original = Arc::clone(&cache.full.entries[0].json);
++        let mut record = snapshot(&app);
++        update(&mut record.connections.full_mut()[0]);
++        assert_matches_uncached(&mut cache, record);
++        assert!(!Arc::ptr_eq(&original, &cache.full.entries[0].json));
++    }
++}
++
++#[test]
++fn basic_and_full_modes_preserve_their_wire_shapes() {
++    let app = app_with_connections();
++    let mut cache = ConnectionCache::default();
++    for full in [false, true, false] {
++        let mut record =
++            SnapshotEnvelope::new(&app, None, RuntimePhase::Running, None, None, full).1;
++        match &mut record.connections {
++            ConnectionSnapshots::Full(records) => {
++                for value in records {
++                    value.connection.historic = true;
++                    value.details.lifecycle = None;
++                }
++            }
++            ConnectionSnapshots::Basic(records) => {
++                for value in records {
++                    value.historic = true;
++                }
++            }
++        }
++        assert_matches_uncached(&mut cache, record);
++        assert_eq!(cache.basic.entries.len(), if full { 0 } else { 2 });
++        assert_eq!(cache.full.entries.len(), if full { 2 } else { 0 });
++    }
++}
