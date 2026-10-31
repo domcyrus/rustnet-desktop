@@ -8,8 +8,11 @@ if (process.platform === "linux") {
   execFileSync("xvfb-run", ["-a", "cargo", "test", "--locked", "--manifest-path",
     "src-tauri/Cargo.toml", "application_icons::linux::tests", "--", "--include-ignored",
     "--test-threads=1"], { stdio: "inherit" });
+} else if (process.platform === "win32") {
+  execFileSync("cargo", ["test", "--locked", "--manifest-path",
+    "src-tauri/Cargo.toml", "application_icons::windows::tests"], { stdio: "inherit" });
 } else if (process.platform !== "darwin") {
-  console.log("Native application icon tests require macOS or Linux; skipped on this platform.");
+  console.log("Native application icon tests require macOS, Linux, or Windows; skipped on this platform.");
 } else {
   const temporary = mkdtempSync(path.join(tmpdir(), "rustnet-icon-tests-"));
   try {

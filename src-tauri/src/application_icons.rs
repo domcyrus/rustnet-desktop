@@ -1,6 +1,9 @@
 #[cfg(target_os = "linux")]
 pub mod linux;
 
+#[cfg(target_os = "windows")]
+mod windows;
+
 // Keep platform-specific icon discovery behind the same optional PNG response.
 #[cfg(not(target_os = "linux"))]
 pub fn lookup(executable: Option<&str>, name: &str, pids: &[u32]) -> Option<String> {
@@ -40,7 +43,11 @@ pub fn lookup(executable: Option<&str>, name: &str, pids: &[u32]) -> Option<Stri
         unsafe { rustnet_application_icon_free(pointer) };
         Some(icon)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        windows::lookup(executable, name, pids)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (executable, name, pids);
         None

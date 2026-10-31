@@ -274,11 +274,13 @@ Tauri の公証資格情報（`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID`、
 詳細は [Tauri の署名と公証ガイド](https://v2.tauri.app/distribute/sign/macos/)を参照してください。
 両方のサイドカーとアプリは識別子を維持し、同じ Team ID を使用する必要があります。
 未署名やアドホック署名でもビルドできますが、特権ヘルパーは有効化できません。
-`test:application-icons` は macOS と Linux でネイティブアイコンを検証します。Linux では
+`test:application-icons` は macOS、Linux、Windows でネイティブアイコンを検証します。Linux では
 `xvfb`、`xauth`、SVG ローダー（Debian/Ubuntu では `librsvg2-common`）が必要です。
 開発版はインストール済みのデスクトップエントリと現在の GTK テーマから Linux のアイコンを取得します。
 Flatpak、Snap、shell ラッパー経由で起動するアプリは、実行ファイルを確実に照合できない場合、
 従来のアイコンを表示することがあります。
+Windows の開発版は実行ファイルからアイコンを取得し、必要に応じて PID からパスを解決します。
+アクセスできないプロセスやアイコンを含まないファイルには従来のアイコンを表示します。
 
 `test:macos-helper` は macOS で通常ユーザーのブローカー/記述子テストを行い、他の環境ではスキップします。
 デーモンはインストールしません。署名済みの統合検証では承認後に Automatic を選び、
