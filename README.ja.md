@@ -6,6 +6,10 @@ Tauri 2 を使った RustNet のデスクトップフロントエンドです。
 詳細パネル、トラフィックグラフは実際のバージョン 1 の headless スナップショットを
 使用します。アプリにサンプルトラフィックは表示しません。
 
+![macOS の RustNet Desktop でアプリの通信量とリアルタイムのトラフィックグラフを表示](docs/screenshots/applications-macos.png)
+
+開発版プレビュー：macOS のアプリ別トラフィック表示（未リリース）。
+
 ## ロードマップ
 
 macOS と Windows 向けの署名済みバイナリを提供し、macOS 版の公証も行いたいと考えています。

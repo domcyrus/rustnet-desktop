@@ -5,6 +5,10 @@
 基于 Tauri 2 的 RustNet 桌面前端。应用视图、连接表、详情面板和流量图使用真实的
 第 1 版无界面 JSON 快照；应用不会显示模拟流量。
 
+![macOS 上的 RustNet 桌面界面，显示应用流量和实时流量图](docs/screenshots/applications-macos.png)
+
+开发预览：macOS 上的应用流量视图（尚未发布）。
+
 ## 路线图
 
 我们希望为 macOS 和 Windows 提供签名二进制文件，并为 macOS 版本完成公证。

@@ -6,6 +6,10 @@ A Tauri 2 desktop frontend for the RustNet capture engine. The application explo
 connection table, inspector, and traffic charts consume real version 1 headless
 snapshots. No sample traffic is used by the application.
 
+![RustNet Desktop on macOS showing application traffic and a live traffic chart](docs/screenshots/applications-macos.png)
+
+Development preview: application traffic on macOS (unreleased).
+
 ## Roadmap
 
 We would like to provide signed binaries for macOS and Windows, including macOS
