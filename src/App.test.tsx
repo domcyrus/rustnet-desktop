@@ -42,9 +42,26 @@ beforeEach(() => {
       disconnect() {}
     },
   );
-  vi.mocked(invoke).mockImplementation(async (command) => {
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
     if (command === "list_interfaces") return availableInterfaces;
-    if (command === "capture_view") return view;
+    if (command === "capture_view") {
+      const options = args as {
+        known?: Omit<typeof view, "snapshot">;
+        includeSnapshot?: boolean;
+      } | undefined;
+      const { snapshot, ...cursor } = view;
+      const known = options?.known;
+      if (
+        known && Object.entries(cursor).every(([key, value]) =>
+          (key === "revision" && options?.includeSnapshot === false) ||
+          known[key as keyof typeof known] === value,
+        )
+      ) return null;
+      return {
+        ...cursor,
+        snapshot: options?.includeSnapshot === false ? null : snapshot,
+      };
+    }
     if (command === "stop_capture") {
       view = { ...view, status: "stopped" };
       return undefined;
@@ -58,6 +75,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   cleanup();
+  vi.restoreAllMocks();
   vi.clearAllMocks();
   vi.unstubAllGlobals();
 });
@@ -537,13 +555,16 @@ describe("desktop workflow", () => {
         .hasAttribute("disabled"),
     ).toBe(false);
   });
-  it("freezes displayed data while continuing to poll capture", async () => {
+  it("freezes displayed data while polling status without reporting stalled updates", async () => {
     render(<App />);
     fireEvent.click(
       await screen.findByRole("button", { name: /Firefox.*1 connections/ }),
     );
     await screen.findByRole("button", { name: /Firefox.*1 connections/ });
+    const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 10000);
     fireEvent.click(screen.getByRole("button", { name: "Freeze view" }));
+    expect(screen.getByTitle("Live capture. Open capture settings")).toBeTruthy();
+    clock.mockRestore();
     const previousPolls = vi
       .mocked(invoke)
       .mock.calls.filter(([command]) => command === "capture_view").length;

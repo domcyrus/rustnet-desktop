@@ -189,6 +189,8 @@ further workarounds. Black areas alone do not establish the exact cause.
 - Charts retain up to 121 samples over 60 seconds for every application, including
   while viewing another application. A new capture resets them. **Freeze view**
   pauses only the display; capture and recording continue.
+  While frozen or hidden, the window requests only capture status. Resuming fetches
+  the latest snapshot; chart samples from the suspended period are not reconstructed.
 - **Show breakdown graph** compares captured and attributed rates. Coverage counts
   original frame lengths, including link-layer headers, split into attributed,
   tracked but unattributed, and outside tracked connections. Attribution is fixed
@@ -243,8 +245,12 @@ and execute that protected copy; debug engine overrides are rejected. Recording
 files are created exclusively by the regular user. User GeoIP discovery is
 resolved by the app before descriptors cross the privilege boundary.
 
-The bridge retains one latest snapshot, caps individual records at 16 MiB, and
-bounds diagnostic output. The UI polls serially every 500 ms, validates schema 1,
+The bridge retains the latest validated snapshot as shared raw JSON, caps individual
+records at 16 MiB, and bounds diagnostic output. It forwards JSON without rebuilding
+or deep-copying its connection tree. The UI polls every 500 ms with a cursor;
+unchanged responses omit the payload and do not update charts. Frozen or hidden
+views poll only status, including errors, and request a full snapshot on resume.
+The UI validates schema 1,
 and shows Connections as one continuous table. Application lists and their destination
 lists use pages of 75 items. Packet decoding, process lookup,
 privilege dropping, and sandboxing stay in the existing engine. The webview has no

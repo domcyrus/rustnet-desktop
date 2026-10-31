@@ -100,6 +100,7 @@ export default function App() {
     view,
     display,
     paused,
+    updatesSuspended,
     togglePaused,
     acceptView,
     bridgeError,
@@ -166,6 +167,7 @@ export default function App() {
   ].sort();
   const stale =
     active &&
+    !updatesSuspended &&
     view.status === "running" &&
     lastUpdated > 0 &&
     Date.now() - lastUpdated > 4000;

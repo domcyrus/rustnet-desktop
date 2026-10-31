@@ -64,8 +64,16 @@ async fn list_interfaces() -> Result<serde_json::Value, String> {
 }
 
 #[tauri::command]
-async fn capture_view(state: State<'_, Desktop>) -> Result<engine::CaptureView, String> {
-    Ok(state.engine.lock().await.view())
+async fn capture_view(
+    state: State<'_, Desktop>,
+    known: Option<engine::CaptureCursor>,
+    include_snapshot: Option<bool>,
+) -> Result<Option<engine::CaptureView>, String> {
+    Ok(state
+        .engine
+        .lock()
+        .await
+        .view(known.as_ref(), include_snapshot.unwrap_or(true)))
 }
 
 #[tauri::command]
