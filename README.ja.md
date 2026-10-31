@@ -256,6 +256,7 @@ pnpm run build
 pnpm test
 pnpm run test:engine-source
 pnpm run test:macos-helper
+pnpm run test:application-icons
 pnpm run check:engine
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
@@ -273,6 +274,12 @@ Tauri の公証資格情報（`APPLE_ID`、`APPLE_PASSWORD`、`APPLE_TEAM_ID`、
 詳細は [Tauri の署名と公証ガイド](https://v2.tauri.app/distribute/sign/macos/)を参照してください。
 両方のサイドカーとアプリは識別子を維持し、同じ Team ID を使用する必要があります。
 未署名やアドホック署名でもビルドできますが、特権ヘルパーは有効化できません。
+`test:application-icons` は macOS と Linux でネイティブアイコンを検証します。Linux では
+`xvfb`、`xauth`、SVG ローダー（Debian/Ubuntu では `librsvg2-common`）が必要です。
+開発版はインストール済みのデスクトップエントリと現在の GTK テーマから Linux のアイコンを取得します。
+Flatpak、Snap、shell ラッパー経由で起動するアプリは、実行ファイルを確実に照合できない場合、
+従来のアイコンを表示することがあります。
+
 `test:macos-helper` は macOS で通常ユーザーのブローカー/記述子テストを行い、他の環境ではスキップします。
 デーモンはインストールしません。署名済みの統合検証では承認後に Automatic を選び、
 スナップショットの帰属方式が PKTAP であること、記録のフラッシュ、UI の終了、ヘルパー解除を確認します。

@@ -224,6 +224,7 @@ pnpm run build
 pnpm test
 pnpm run test:engine-source
 pnpm run test:macos-helper
+pnpm run test:application-icons
 pnpm run check:engine
 cargo fmt --manifest-path src-tauri/Cargo.toml --check
 cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
@@ -241,6 +242,11 @@ pnpm run bundle
 具体步骤见 [Tauri 签名与公证指南](https://v2.tauri.app/distribute/sign/macos/)。
 两个附带程序和应用须保留各自标识符，并使用相同 Team ID。
 未签名或临时签名构建可以编译，但不能启用特权辅助程序。
+`test:application-icons` 在 macOS 和 Linux 上检查原生图标。Linux 需要
+`xvfb`、`xauth` 和 SVG 加载器（Debian/Ubuntu 上为 `librsvg2-common`）。
+开发版本通过已安装的桌面条目和当前 GTK 主题获取 Linux 图标。通过 Flatpak、Snap
+或 shell 包装脚本启动的应用，如果无法可靠匹配可执行文件，可能仍显示占位图标。
+
 `test:macos-helper` 在 macOS 上运行普通用户的代理/描述符测试，在其他平台跳过，不安装守护程序。
 签名集成验证还需批准辅助程序，选择 Automatic 并确认快照的归属方式为 PKTAP，
 以及检查录制刷新、界面关闭和辅助程序移除。
