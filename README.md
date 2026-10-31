@@ -68,7 +68,7 @@ and select **Start capture**.
 | --- | --- |
 | **macOS 13+** | Install Xcode Command Line Tools. For PKTAP capture without signing, use the [sudo development launcher](BUILDING.md#sudo-capture-after-building); only the engine uses sudo. |
 | **Linux** | Install WebKitGTK 4.1 and GTK 3 development packages, then [grant the engine capture capabilities](docs/GUIDE.md#capture-permissions). |
-| **Windows** | Install the MSVC toolchain, WebView2, and Npcap with access for your normal user. |
+| **Windows** | Install the MSVC toolchain, WebView2, and Npcap. Launch normally; starting capture requests UAC approval for the engine only. |
 
 For an isolated build on macOS or Linux, follow the [build guide](BUILDING.md).
 Prefer a terminal interface? Try [RustNet](https://github.com/domcyrus/rustnet).

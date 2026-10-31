@@ -7,12 +7,15 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, value::RawValue};
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
-use tokio::process::{Child, Command};
+#[cfg(not(windows))]
+use tokio::process::Child;
+use tokio::process::Command;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 const MAX_RECORD_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_DIAGNOSTIC_BYTES: usize = 16 * 1024;
+#[cfg(not(windows))]
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 
 type SharedView = Arc<Mutex<CaptureView>>;
@@ -158,12 +161,17 @@ impl Engine {
             stop,
             task: tokio::spawn(async move {
                 match process {
+                    #[cfg(not(windows))]
                     CaptureProcess::Local(child, sudo) => {
                         supervise(child, receive, view, sudo).await
                     }
                     #[cfg(target_os = "macos")]
                     CaptureProcess::Helper(capture) => {
                         supervise_helper(*capture, receive, view).await
+                    }
+                    #[cfg(windows)]
+                    CaptureProcess::Windows(capture) => {
+                        supervise_windows(*capture, receive, view).await
                     }
                 }
             }),
@@ -183,11 +191,15 @@ impl Engine {
 }
 
 enum CaptureProcess {
+    #[cfg(not(windows))]
     Local(Child, bool),
     #[cfg(target_os = "macos")]
     Helper(Box<crate::macos::Capture>),
+    #[cfg(windows)]
+    Windows(Box<crate::windows_helper::Capture>),
 }
 
+#[cfg(not(windows))]
 pub fn sudo_mode() -> bool {
     #[cfg(all(target_os = "macos", debug_assertions))]
     {
@@ -200,6 +212,26 @@ pub fn sudo_mode() -> bool {
 }
 
 async fn launch(
+    interface: String,
+    export: Option<PathBuf>,
+    geoip_directory: Option<PathBuf>,
+) -> Result<CaptureProcess, String> {
+    #[cfg(windows)]
+    {
+        return crate::windows_helper::start(
+            &interface,
+            export.as_deref(),
+            geoip_directory.as_deref(),
+        )
+        .await
+        .map(|capture| CaptureProcess::Windows(Box::new(capture)));
+    }
+    #[cfg(not(windows))]
+    launch_local(interface, export, geoip_directory).await
+}
+
+#[cfg(not(windows))]
+async fn launch_local(
     interface: String,
     export: Option<PathBuf>,
     geoip_directory: Option<PathBuf>,
@@ -468,6 +500,7 @@ async fn read_snapshots(
     }
 }
 
+#[cfg(not(windows))]
 async fn stop_child(child: &mut Child, sudo: bool) -> Result<std::process::ExitStatus, String> {
     drop(child.stdin.take());
     match tokio::time::timeout(STOP_TIMEOUT, child.wait()).await {
@@ -479,6 +512,7 @@ async fn stop_child(child: &mut Child, sudo: bool) -> Result<std::process::ExitS
     }
 }
 
+#[cfg(not(windows))]
 async fn terminate_child(child: &mut Child, sudo: bool) -> Result<(), String> {
     #[cfg(all(target_os = "macos", debug_assertions))]
     if sudo {
@@ -490,6 +524,7 @@ async fn terminate_child(child: &mut Child, sudo: bool) -> Result<(), String> {
     child.kill().await.map_err(|e| e.to_string())
 }
 
+#[cfg(not(windows))]
 async fn supervise(
     mut child: Child,
     mut stop: oneshot::Receiver<()>,
@@ -565,6 +600,66 @@ async fn supervise(
             error
         }
     });
+    finish_capture(&view, error);
+}
+
+#[cfg(windows)]
+async fn supervise_windows(
+    mut capture: crate::windows_helper::Capture,
+    mut stop: oneshot::Receiver<()>,
+    view: SharedView,
+) {
+    let output = capture.output.take().expect("helper output configured");
+    let stderr = capture
+        .diagnostics
+        .take()
+        .expect("helper diagnostics configured");
+    let mut reader = tokio::spawn(read_snapshots(BufReader::new(output), view.clone()));
+    let mut diagnostics = tokio::spawn(diagnostics(stderr));
+    let mut reader_done = false;
+    let mut read_error = None;
+    let exit = tokio::select! {
+        exit = capture.wait() => Some(exit),
+        _ = &mut stop => None,
+        result = &mut reader => {
+            reader_done = true;
+            read_error = result.map_err(|e| e.to_string()).and_then(|r| r).err();
+            None
+        }
+    };
+    capture.stop();
+    let exit = match exit {
+        Some(exit) => exit,
+        None => tokio::time::timeout(Duration::from_secs(35), capture.wait())
+            .await
+            .map_err(|_| "The capture helper did not stop within its shutdown deadline".to_string())
+            .and_then(|r| r),
+    };
+    if !reader_done {
+        read_error = match tokio::time::timeout(Duration::from_secs(2), &mut reader).await {
+            Ok(result) => result.map_err(|e| e.to_string()).and_then(|r| r).err(),
+            Err(_) => {
+                reader.abort();
+                Some("Capture output did not close cleanly".into())
+            }
+        };
+    }
+    let message = match tokio::time::timeout(Duration::from_secs(2), &mut diagnostics).await {
+        Ok(Ok(message)) => message,
+        _ => {
+            diagnostics.abort();
+            String::new()
+        }
+    };
+    let error = match exit {
+        Ok(0) => read_error,
+        Ok(code) => Some(if message.is_empty() {
+            format!("Capture helper exited with code {code}")
+        } else {
+            message
+        }),
+        Err(error) => Some(error),
+    };
     finish_capture(&view, error);
 }
 

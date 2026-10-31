@@ -32,6 +32,7 @@ import { Select } from "./Select";
 import { Inspector } from "./Inspector";
 import { Help } from "./Help";
 import { MacosHelper } from "./MacosHelper";
+import { WindowsHelper } from "./WindowsHelper";
 import { AllTraffic } from "./AllTraffic";
 import { ApplicationDetails } from "./ApplicationDetails";
 import { ApplicationIcon } from "./ApplicationIcon";
@@ -409,6 +410,9 @@ export default function App() {
     });
   }
   const captureError = error || bridgeError || view.error;
+  const shutdownError = /shutdown|did not stop|did not close cleanly/i.test(
+    captureError ?? "",
+  );
   const unknown = live.filter((c) => c.process?.pid == null).length;
   const statusLabel =
     view.status === "running"
@@ -699,6 +703,7 @@ export default function App() {
               <X size={16} />
             </button>
             <MacosHelper active={active || busy} />
+            <WindowsHelper />
             <div className="geoip-settings">
               <div>
                 <strong>GeoIP databases</strong>
@@ -758,6 +763,11 @@ export default function App() {
               <p>
                 The last valid snapshot is shown. Capture may still be running;
                 the display will recover automatically when valid data arrives.
+              </p>
+            ) : shutdownError ? (
+              <p>
+                Capture did not finish cleanly. Any recording may be incomplete.
+                Restart the desktop with the latest build before trying again.
               </p>
             ) : (
               <p>

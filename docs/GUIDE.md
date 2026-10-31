@@ -122,8 +122,12 @@ The desktop does not install firewall rules or disable the engine's sandbox.
   builds without sudo development mode use ordinary BPF capture with `lsof` attribution. Configure BPF access
   as described in [INSTALL.md](https://github.com/domcyrus/rustnet/blob/main/INSTALL.md);
   ChmodBPF alone does not grant PKTAP access. Helper approval is separate from BPF permissions.
-- **Windows:** install Npcap with access for your normal user. An installation
-  restricted to administrators needs its permissions configured separately.
+- **Windows:** install Npcap and launch the desktop normally. **Start capture**
+  requests UAC approval for the bundled capture engine; the UI stays unprivileged.
+  The engine removes unnecessary token privileges and exits when capture stops
+  or the UI closes. No service or helper installation is required. See
+  [Windows testing](../BUILDING.md#windows-testing) for launch instructions,
+  tests, and the limits of the engine's privilege reduction.
 - **FreeBSD:** the existing CLI remains supported; desktop support is not provided
   by this initial Tauri application.
 

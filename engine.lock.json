@@ -6,6 +6,14 @@
     {
       "file": "engine/patches/0001-desktop-integration.patch",
       "sha256": "0b9e29ccf88ff38692c41c7bfb2f2f1edbb15418ff101a02edaa114a8280c5f4"
+    },
+    {
+      "file": "engine/patches/0002-windows-privilege-allowlist.patch",
+      "sha256": "b5f30ffc7a3f2aa91321828bb20db34bea3ea7c5792afc7bfc48dca2030636a4"
+    },
+    {
+      "file": "engine/patches/0003-windows-capture-helper.patch",
+      "sha256": "519fa2212a1860c61cb8e5189af1b47ba6cc9ad534fe538c7fc648f57bef9c3f"
     }
   ]
 }
