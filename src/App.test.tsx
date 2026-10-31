@@ -69,6 +69,7 @@ beforeEach(() => {
     if (command === "start_capture") return true;
     if (command === "choose_geoip_directory") return geoipSelection;
     if (command === "macos_helper") return null;
+    if (command === "windows_capture_helper") return false;
     if (command === "application_icon") return null;
     throw new Error(`Unexpected command ${command}`);
   });
@@ -554,6 +555,17 @@ describe("desktop workflow", () => {
         .getByRole("button", { name: "Start capture" })
         .hasAttribute("disabled"),
     ).toBe(false);
+  });
+  it("shows shutdown recovery instead of driver installation advice", async () => {
+    view.status = "error";
+    view.error = "DNS worker did not stop before shutdown deadline: dns-resolver-2; runtime shutdown failed: 1 worker(s) timed out";
+    render(<App />);
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("dns-resolver-2");
+    expect(alert.textContent).toContain("Any recording may be incomplete");
+    expect(alert.textContent).not.toContain("install Npcap");
+    expect(alert.textContent).not.toContain("configure capture capabilities");
+    expect(screen.getByRole("button", { name: /Firefox.*1 connections/ })).toBeTruthy();
   });
   it("freezes displayed data while polling status without reporting stalled updates", async () => {
     render(<App />);

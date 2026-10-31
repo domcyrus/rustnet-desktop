@@ -51,6 +51,96 @@ Choose **Automatic** and start capture. Only the engine starts through sudo; the
 
 If sudo credentials expire, an existing capture continues but a new capture may fail. Quit the desktop and rerun with `--no-build` to authenticate and reuse the same build. Stop capture or close the desktop to flush the recording. Live PKTAP capture and signed SMAppService deployment still require separate validation.
 
+## Windows testing
+
+Windows uses an ordinary build, not the isolated workflow above. In a normal,
+non-administrator PowerShell, install the locked dependencies and build:
+
+```powershell
+pnpm install --frozen-lockfile
+node scripts/build-windows.mjs
+```
+
+The launcher refuses to build elevated. It prepares the pinned engine and an
+unpackaged debug desktop with embedded frontend assets. No Vite server is needed.
+Close an existing test app before rebuilding, since Windows locks running binaries.
+
+Launch from a normal, non-administrator PowerShell:
+
+~~~powershell
+Set-Location C:\path\to\rustnet-desktop
+& .\src-tauri\target\debug\rustnet-desktop.exe
+~~~
+
+Click **Start capture**, then approve the Windows UAC prompt for the capture
+engine. The desktop and WebView stay unprivileged. The desktop refuses an elevated
+launch before creating its WebView. Each new capture requests approval again;
+cancelling approval leaves capture stopped. No service, scheduled task, group
+membership change, or persistent elevated broker is installed.
+
+The helper is a restricted mode of the bundled engine executable. The desktop
+holds that executable open against modification during capture. Engine overrides
+(RUSTNET_DESKTOP_ENGINE and RUSTNET_ENGINE_SOURCE) are rejected for capture.
+Three local-only named pipes use random session identifiers, restrictive ACLs,
+and kernel process-ID checks in both directions. The elevated client uses
+identification-only security quality of service to prevent pipe impersonation.
+The protocol accepts an interface and existing file handles, not commands or
+privileged file paths. Recording files are created without overwriting as the
+normal user; GeoIP files are opened read-only by the UI. The engine duplicates
+only those existing access rights and reads GeoIP data after token reduction.
+
+The Windows engine opens capture handles, permanently removes every token
+privilege except SeChangeNotifyPrivilege (ordinary directory traversal), verifies
+the remaining privileges, and blocks child processes with a job object. Strict
+sandbox failures stop capture. ETW starts after these restrictions, using
+trace-session access through group membership; the engine does not retain debug,
+driver-loading, impersonation, backup/restore, or system-profiling privileges.
+ETW startup failures still fall back to IP Helper polling and show the
+limited-process-detection warning.
+
+The Windows helper uses DNS names observed in captured traffic and TLS SNI.
+It does not issue active reverse-DNS queries: Windows system resolver calls can
+remain blocked beyond shutdown, and those queries do not belong in the elevated
+capture process. Addresses without an observed name remain numeric. The standalone
+CLI retains its existing reverse-DNS option.
+
+Stopping capture closes the control pipe, drains the final snapshot, and flushes
+the recording. The helper also watches the UI process so a crash cannot leave
+capture running indefinitely. A watchdog bounds initialization to 30 seconds and
+stuck shutdown to 15 seconds after a stop request; forced shutdown can leave an
+incomplete recording and is reported as an error.
+
+**Privilege removal is not de-elevation.** Administrator group membership and
+integrity level remain in the engine, so it retains filesystem and registry
+access granted to Administrators. The Windows sandbox does not constrain
+filesystem or outbound network access. “Fully enforced” means the configured
+token/job restrictions succeeded, not that the engine became a standard user.
+The UI never receives those administrator permissions. Use trusted builds;
+signed installer deployment and UAC with credentials for a different account
+need separate validation.
+
+Run the ordinary automated checks from a non-administrator terminal:
+
+~~~powershell
+node scripts/test-windows-sandbox.mjs
+cargo test --locked --manifest-path src-tauri/Cargo.toml
+~~~
+
+These cover token removal on a duplicate token, idempotence, child-process
+blocking, protocol rejection, preservation of read-only file access, pipe
+exclusivity, and peer PID checks. They never change the caller's token.
+After building, run the interactive integration checks individually; each asks
+for UAC approval and requires Npcap:
+
+~~~powershell
+cargo test --locked --manifest-path src-tauri/Cargo.toml elevated_engine_records_and_stops_while_controller_stays_unprivileged -- --ignored --nocapture
+cargo test --locked --manifest-path src-tauri/Cargo.toml controller_crash_stops_elevated_engine -- --ignored --nocapture
+~~~
+
+The first verifies an unprivileged controller, ETW attribution, sandbox status,
+PCAPNG recording, and graceful shutdown. The second kills its own disposable
+controller process and checks that the elevated engine exits.
+
 ## Boundaries and checks
 
 Sandboxing limits what a compromised build can do to the host; it does not prove that its output is trustworthy. Build scripts can modify their working copy, private caches and artifacts. Never run or elevate output from untrusted source or dependencies. The capture engine still has a privileged initialization phase before its runtime sandbox. Existing sudo credentials are neither requested nor refreshed during building; the macOS policy blocks sudo/su execution, while the Linux sandbox prevents privilege gains.

@@ -106,6 +106,8 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - run: node scripts/test-application-icons.mjs
+      - run: node scripts/test-windows-sandbox.mjs
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
 
   macos-helper:
     runs-on: macos-latest

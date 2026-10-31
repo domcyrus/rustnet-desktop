@@ -38,6 +38,9 @@ export function prepareEngineSource(desktop) {
   try {
     console.log(`Fetching RustNet engine ${lock.revision}`);
     git(staging, ["init", "--quiet"]);
+    // Keep pinned sources and patch output identical on Windows and Unix.
+    git(staging, ["config", "core.autocrlf", "false"]);
+    git(staging, ["config", "core.eol", "lf"]);
     git(staging, ["remote", "add", "origin", lock.repository]);
     git(staging, ["fetch", "--depth=1", "origin", lock.revision]);
     git(staging, ["checkout", "--detach", "--quiet", lock.revision]);

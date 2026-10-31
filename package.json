@@ -11,6 +11,8 @@
     "desktop": "tauri dev",
     "desktop:sudo": "node scripts/desktop-sudo.mjs",
     "build:isolated": "node scripts/isolated-build.mjs",
+    "build:windows": "node scripts/build-windows.mjs",
+    "test:windows-sandbox": "node scripts/test-windows-sandbox.mjs",
     "test:isolation": "node --test scripts/isolation.check.mjs",
     "prepare:engine": "node scripts/prepare-engine.mjs",
     "bundle": "tauri build",

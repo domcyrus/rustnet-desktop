@@ -6,6 +6,8 @@ mod dev_sudo;
 mod engine;
 #[cfg(target_os = "macos")]
 mod macos;
+#[cfg(windows)]
+mod windows_helper;
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{Manager, State};
@@ -74,6 +76,11 @@ async fn capture_view(
         .lock()
         .await
         .view(known.as_ref(), include_snapshot.unwrap_or(true)))
+}
+
+#[tauri::command]
+fn windows_capture_helper() -> bool {
+    cfg!(windows)
 }
 
 #[tauri::command]
@@ -168,6 +175,11 @@ async fn macos_helper(
 }
 
 fn main() {
+    #[cfg(windows)]
+    if let Err(error) = windows_helper::ensure_unprivileged() {
+        windows_helper::startup_error(&error);
+        std::process::exit(1);
+    }
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Desktop::default())
@@ -178,6 +190,7 @@ fn main() {
             choose_geoip_directory,
             stop_capture,
             application_icon,
+            windows_capture_helper,
             macos_helper
         ])
         .build(tauri::generate_context!())
