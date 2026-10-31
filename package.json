@@ -17,6 +17,7 @@
     "desktop:linux-compat": "env WEBKIT_DISABLE_DMABUF_RENDERER=1 tauri dev",
     "test:engine-source": "node --test scripts/engine-source.check.mjs",
     "test:macos-helper": "node scripts/test-macos-helper.mjs",
+    "test:application-icons": "node scripts/test-application-icons.mjs",
     "check:engine": "node scripts/check-engine.mjs"
   },
   "dependencies": {

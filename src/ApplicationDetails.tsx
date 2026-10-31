@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { ArrowDownLeft, ArrowUpRight, Blocks } from "lucide-react";
+import { ArrowDownLeft, ArrowUpRight } from "lucide-react";
+import { ApplicationIcon } from "./ApplicationIcon";
 import { Chart } from "./Chart";
 import { Metric, Pagination, paginate } from "./components";
 import {
@@ -32,9 +33,7 @@ export function ApplicationDetails({
   return (
     <>
       <div className="app-title">
-        <span className="app-icon large">
-          <Blocks size={23} />
-        </span>
+        <ApplicationIcon app={app} large />
         <div>
           <h2>{app.name}</h2>
           <p className="subtitle">

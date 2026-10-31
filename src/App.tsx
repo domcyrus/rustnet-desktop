@@ -34,6 +34,7 @@ import { Help } from "./Help";
 import { MacosHelper } from "./MacosHelper";
 import { AllTraffic } from "./AllTraffic";
 import { ApplicationDetails } from "./ApplicationDetails";
+import { ApplicationIcon } from "./ApplicationIcon";
 import { ConnectionTable } from "./ConnectionTable";
 import { Metric, Pagination, Empty, paginate } from "./components";
 import {
@@ -1052,13 +1053,7 @@ export default function App() {
                     });
                   }}
                 >
-                  <span className="app-icon">
-                    {a.name === "Unattributed" ? (
-                      <CircleHelp size={20} />
-                    ) : (
-                      <Blocks size={20} />
-                    )}
-                  </span>
+                  <ApplicationIcon app={a} />
                   <span className="app-name">
                     <strong>{a.name}</strong>
                     {duplicateAppNames.has(a.name) && (

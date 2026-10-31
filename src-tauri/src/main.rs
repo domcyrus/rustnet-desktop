@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod application_icons;
 #[cfg(all(target_os = "macos", debug_assertions))]
 mod dev_sudo;
 mod engine;
@@ -16,6 +17,25 @@ struct Desktop {
     engine: Mutex<engine::Engine>,
     exiting: AtomicBool,
     exit_ready: AtomicBool,
+}
+
+#[tauri::command]
+async fn application_icon(
+    executable: Option<String>,
+    name: String,
+    pids: Vec<u32>,
+) -> Result<Option<String>, String> {
+    if executable.as_ref().is_some_and(|path| path.len() > 4096)
+        || name.len() > 256
+        || pids.len() > 32
+    {
+        return Ok(None);
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        application_icons::lookup(executable.as_deref(), &name, &pids)
+    })
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -129,6 +149,7 @@ fn main() {
             start_capture,
             choose_geoip_directory,
             stop_capture,
+            application_icon,
             macos_helper
         ])
         .build(tauri::generate_context!())

@@ -121,6 +121,7 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
       - run: pnpm run prepare:engine --release
       - run: pnpm run test:macos-helper
+      - run: pnpm run test:application-icons
       - run: pnpm test
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
       - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
