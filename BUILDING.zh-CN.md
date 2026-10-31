@@ -37,11 +37,19 @@ node scripts/isolated-build.mjs --build-only
 node scripts/desktop-sudo.mjs
 ```
 
-若项目依赖已经安装，也可使用别名 `pnpm run desktop:sudo`。直接使用 Node 无需预先普通安装依赖。启动器先完成隔离的 debug 构建和测试，仅在成功后请求 sudo 认证，然后直接运行包含内嵌资源的桌面程序。认证后不会启动 Vite、监视器、编译器或包管理器任务，也不会定期刷新 sudo 凭据。
+若要复用现有 debug 桌面程序和抓包引擎，不下载依赖、不编译也不运行测试：
+
+```sh
+node scripts/desktop-sudo.mjs --no-build
+```
+
+启动器会先检查 `.isolated-build/target/debug/` 中两个可执行文件，再请求 sudo 认证。文件缺失、不可执行或使用符号链接时会报错并提示重新构建，不会自动构建。桌面退出前始终持有同一个构建锁。此选项不检查二进制是否与当前源码一致；修改源码或依赖后请省略 `--no-build`。也支持 `pnpm run desktop:sudo --no-build`。
+
+若项目依赖已经安装，也可使用别名 `pnpm run desktop:sudo`。直接使用 Node 无需预先普通安装依赖。默认情况下，启动器先完成隔离的 debug 构建和测试，仅在成功后请求 sudo 认证，然后直接运行包含内嵌资源的桌面程序。认证后不会启动 Vite、监视器、编译器或包管理器任务，也不会定期刷新 sudo 凭据。
 
 选择 **Automatic** 后开始抓包。只有引擎通过 sudo 启动，界面保持普通用户权限。固定版本的引擎打开抓包后降权，并启用严格沙箱。指定接口会禁用 PKTAP。此流程不支持自定义引擎源码或二进制。无需注册辅助程序、签名、公证或修改 sudoers。发布构建仍忽略 `RUSTNET_DEV_SUDO`，使用 PKTAP 需要已签名的辅助程序。
 
-sudo 凭据过期不影响已有抓包，但新的抓包可能失败。退出桌面后重新运行命令以构建并认证。停止抓包或关闭桌面会完成录制写入。实际 PKTAP 抓包及已签名 SMAppService 部署仍需单独验证。
+sudo 凭据过期不影响已有抓包，但新的抓包可能失败。退出桌面后加上 `--no-build` 重新运行，以认证并复用原有构建。停止抓包或关闭桌面会完成录制写入。实际 PKTAP 抓包及已签名 SMAppService 部署仍需单独验证。
 
 ## 边界与检查
 
