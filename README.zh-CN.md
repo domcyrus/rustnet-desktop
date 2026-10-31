@@ -4,6 +4,8 @@
 
 <h1 align="center">RustNet Desktop</h1>
 
+<p align="center"><strong>Alpha 预览版</strong> · 正在积极开发中，需从源码构建，可能存在问题并随时发生变化。</p>
+
 <p align="center">
   <strong>看清哪些应用在联网，了解每一段网络流量。</strong><br>
   RustNet 网络监控引擎的开源桌面界面。
@@ -22,14 +24,14 @@
 
 ![macOS 上的 RustNet Desktop，显示各应用带宽、活跃连接和实时流量图](docs/screenshots/applications-macos.png)
 
-<p align="center"><sub>macOS 开发版预览，展示实际捕获的流量。尚未发布。</sub></p>
+<p align="center"><sub>macOS 上的 Alpha 预览版，展示实际捕获的流量。</sub></p>
 
 ## 探索网络流量
 
 找到带宽突增背后的应用，查看它连接的目标，并直接在桌面界面中检查连接。
 使用 Rust 和 Tauri 构建，由 [RustNet 抓包引擎](https://github.com/domcyrus/rustnet)驱动。
 
-当前开发版本提供：
+Alpha 预览版提供：
 
 | 想了解什么 | 可以查看什么 |
 | --- | --- |
@@ -43,7 +45,7 @@
 
 ## 开始体验
 
-**RustNet Desktop 尚未发布，目前需要从源码构建。** 请在目标平台上构建。
+**RustNet Desktop 目前处于 Alpha 预览阶段，需要从源码构建。** 请在目标平台上构建。
 需要 Git、Rust、Node.js 22.22.2+ 或 24.15.0+ LTS、
 [pnpm 12.15.0](https://pnpm.io/installation) 和[平台依赖](docs/GUIDE.zh-CN.md#开发)。
 

@@ -4,6 +4,8 @@
 
 <h1 align="center">RustNet Desktop</h1>
 
+<p align="center"><strong>Alpha preview</strong> · Under active development. Build from source; expect bugs and changes.</p>
+
 <p align="center">
   <strong>See which apps are talking. Understand your network traffic.</strong><br>
   An open-source desktop interface for the RustNet network monitoring engine.
@@ -22,7 +24,7 @@
 
 ![RustNet Desktop on macOS showing per-application bandwidth, active connections, and a live traffic chart](docs/screenshots/applications-macos.png)
 
-<p align="center"><sub>Development preview on macOS, showing real captured traffic. Not yet released.</sub></p>
+<p align="center"><sub>Alpha preview on macOS, showing real captured traffic.</sub></p>
 
 ## Explore your traffic
 
@@ -30,7 +32,7 @@ Find the app behind a bandwidth spike, see where it connects, and inspect the
 connection without leaving the desktop. Built with Rust and Tauri, powered by
 [the RustNet capture engine](https://github.com/domcyrus/rustnet).
 
-The current development build includes:
+The alpha preview includes:
 
 | What you want to know | What you can explore |
 | --- | --- |
@@ -45,7 +47,7 @@ Capture coverage makes unattributed traffic visible too. See the
 
 ## Try it
 
-**RustNet Desktop is unreleased and currently built from source.** Build on the
+**RustNet Desktop is an alpha preview, currently built from source.** Build on the
 platform you intend to use. You'll need Git, Rust, Node.js 22.22.2+ or 24.15.0+ LTS,
 [pnpm 12.15.0](https://pnpm.io/installation), and the
 [platform prerequisites](docs/GUIDE.md#develop).

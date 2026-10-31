@@ -4,6 +4,8 @@
 
 <h1 align="center">RustNet Desktop</h1>
 
+<p align="center"><strong>Alpha プレビュー</strong> · 現在開発中です。ソースからのビルドが必要で、不具合や仕様変更があり得ます。</p>
+
 <p align="center">
   <strong>どのアプリが通信しているのか。ネットワークの動きを、ひと目で。</strong><br>
   RustNet ネットワーク監視エンジンのオープンソース・デスクトップ UI。
@@ -22,14 +24,14 @@
 
 ![macOS の RustNet Desktop でアプリ別の帯域使用量、アクティブ接続、リアルタイムの通信グラフを表示](docs/screenshots/applications-macos.png)
 
-<p align="center"><sub>macOS 開発版のプレビュー。実際にキャプチャした通信を表示しています。未リリースです。</sub></p>
+<p align="center"><sub>macOS の Alpha プレビュー。実際にキャプチャした通信を表示しています。</sub></p>
 
 ## 通信を調べる
 
 帯域使用量が急増した原因のアプリを見つけ、接続先を確認し、そのまま接続の詳細を調べられます。
 Rust と Tauri で構築し、[RustNet キャプチャエンジン](https://github.com/domcyrus/rustnet)を使用しています。
 
-現在の開発版では、次の機能を利用できます。
+Alpha プレビューでは、次の機能を利用できます。
 
 | 知りたいこと | 確認できる情報 |
 | --- | --- |
@@ -44,7 +46,7 @@ Rust と Tauri で構築し、[RustNet キャプチャエンジン](https://gith
 
 ## 試してみる
 
-**RustNet Desktop は未リリースで、現在はソースからビルドする必要があります。**
+**RustNet Desktop は Alpha プレビュー段階で、現在はソースからビルドする必要があります。**
 使用するプラットフォーム上でビルドしてください。Git、Rust、Node.js 22.22.2+ または
 24.15.0+ LTS、[pnpm 12.15.0](https://pnpm.io/installation)、
 [各プラットフォームの依存関係](docs/GUIDE.ja.md#開発)が必要です。
