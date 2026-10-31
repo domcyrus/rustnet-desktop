@@ -1,253 +1,90 @@
-# RustNet 桌面界面（尚未发布）
+<p align="center">
+  <img src="public/rustnet.svg" width="88" height="88" alt="RustNet 标志">
+</p>
 
-[English](README.md) | [简体中文](README.zh-CN.md) | [日本語](README.ja.md)
+<h1 align="center">RustNet Desktop</h1>
 
-基于 Tauri 2 的 RustNet 桌面前端。应用视图、连接表、详情面板和流量图使用真实的
-第 1 版无界面 JSON 快照；应用不会显示模拟流量。
+<p align="center">
+  <strong>看清哪些应用在联网，了解每一段网络流量。</strong><br>
+  RustNet 网络监控引擎的开源桌面界面。
+</p>
 
-![macOS 上的 RustNet 桌面界面，显示应用流量和实时流量图](docs/screenshots/applications-macos.png)
+<p align="center">
+  <a href="#开始体验">开始体验</a> ·
+  <a href="#探索网络流量">探索网络流量</a> ·
+  <a href="docs/GUIDE.zh-CN.md">文档</a> ·
+  <a href="https://github.com/domcyrus/rustnet-desktop/issues">反馈</a>
+</p>
 
-开发预览：macOS 上的应用流量视图（尚未发布）。
+<p align="center">
+  <a href="README.md">English</a> · <strong>简体中文</strong> · <a href="README.ja.md">日本語</a>
+</p>
 
-## 路线图
+![macOS 上的 RustNet Desktop，显示各应用带宽、活跃连接和实时流量图](docs/screenshots/applications-macos.png)
 
-我们希望为 macOS 和 Windows 提供签名二进制文件，并为 macOS 版本完成公证。
-这可能需要一些资金支持，以支付代码签名相关费用。
+<p align="center"><sub>macOS 开发版预览，展示实际捕获的流量。尚未发布。</sub></p>
 
-## 开发
+## 探索网络流量
 
-安装 Rust、Node.js 22.22.2+ 或 24.15.0+ LTS、现有 RustNet 构建依赖，以及
-[Tauri 桌面依赖](https://v2.tauri.app/start/prerequisites/)。Linux 还需要
-WebKitGTK 4.1 和 GTK 3 开发包；Windows 需要 MSVC、WebView2 和 Npcap。
-请在目标平台上构建。安装 [pnpm](https://pnpm.io/installation) 12.15.0
-（版本固定在 `package.json`），例如运行 `npm install --global pnpm@12.15.0 --allow-scripts=pnpm`。
-macOS 构建要求 macOS 13+ 和 Xcode 命令行工具（`xcode-select --install`）。
-在此目录运行：
+找到带宽突增背后的应用，查看它连接的目标，并直接在桌面界面中检查连接。
+使用 Rust 和 Tauri 构建，由 [RustNet 抓包引擎](https://github.com/domcyrus/rustnet)驱动。
 
-macOS 和 Linux 可先运行 `node scripts/isolated-build.mjs`，无需预先安装项目依赖。
-详情见[隔离构建及 sudo 抓包](BUILDING.zh-CN.md)。以下为普通热重载开发流程：
+当前开发版本提供：
+
+| 想了解什么 | 可以查看什么 |
+| --- | --- |
+| **哪个应用正在使用网络？** | 各应用的下载与上传速率、活跃连接，以及最近 60 秒的流量图。 |
+| **它正在连接哪里？** | 可搜索的连接列表，包含进程、主机名、IP、端口和协议信息。可选的 GeoIP 数据库提供地理位置参考。 |
+| **连接上发生了什么？** | 在引擎能够观测的范围内，查看 DNS、TLS、进程元数据和传输健康信息。 |
+| **能否留待后续分析？** | 浏览保留的历史连接、冻结视图，或在抓包期间录制带注释的 PCAPNG 文件。 |
+
+桌面应用以普通用户运行，抓包权限由引擎使用。覆盖统计也会展示无法归属到应用的流量。
+各平台的限制、权限和计数含义见[指南](docs/GUIDE.zh-CN.md)。
+
+## 开始体验
+
+**RustNet Desktop 尚未发布，目前需要从源码构建。** 请在目标平台上构建。
+需要 Git、Rust、Node.js 22.22.2+ 或 24.15.0+ LTS、
+[pnpm 12.15.0](https://pnpm.io/installation) 和[平台依赖](docs/GUIDE.zh-CN.md#开发)。
 
 ```sh
+git clone https://github.com/domcyrus/rustnet-desktop.git
+cd rustnet-desktop
 pnpm install --frozen-lockfile
 pnpm run desktop
 ```
 
-本仓库包含桌面 UI、Tauri 桥接层和打包配置。抓包引擎和 TUI 保留在
-[domcyrus/rustnet](https://github.com/domcyrus/rustnet)。构建需要 Git。首次启动会获取
-`engine.lock.json` 固定的引擎提交，验证并应用列出的补丁，构建 CLI 并复制到
-`src-tauri/binaries`。源码缓存在 `.engine/`，不需要相邻的 RustNet 检出目录。
-单独运行 `pnpm run dev` 只能预览布局；抓包功能需要 Tauri。
+首次启动会自动获取并构建固定版本的 RustNet 引擎，无需单独检出引擎仓库。
+配置[抓包权限](docs/GUIDE.zh-CN.md#抓包权限)后，选择接口并点击 **Start capture**。
 
-### 引擎开发与更新
+| 平台 | 抓包前的准备 |
+| --- | --- |
+| **macOS 13+** | 安装 Xcode 命令行工具。无需签名的 PKTAP 抓包可使用 [sudo 开发启动器](BUILDING.zh-CN.md#构建完成后使用-sudo-抓包)，仅引擎使用 sudo。 |
+| **Linux** | 安装 WebKitGTK 4.1 和 GTK 3 开发包，然后[授予引擎抓包 capabilities](docs/GUIDE.zh-CN.md#抓包权限)。 |
+| **Windows** | 安装 MSVC 工具链、WebView2，以及允许普通用户访问的 Npcap。 |
 
-此仓库暂时通过 `engine/patches/0001-desktop-integration.patch` 保存尚未合入上游的
-接口发现、受控关闭、历史连接、丰富元数据和抓包覆盖统计等改动。原始改动仍保留在
-RustNet 检出目录，供单独审查。合入上游后，将 `engine.lock.json` 更新到相应提交，
-并删除补丁条目及文件。每个补丁均有 SHA-256 校验值，修改补丁时必须更新锁文件。
-桌面使用快照 schema 1，并允许新增字段。更新引擎时必须通过下方的前端验证和 Rust
-桥接测试。补丁只是临时集成措施，不是另一套引擎实现。
+macOS 和 Linux 的隔离构建方式见[构建指南](BUILDING.zh-CN.md)。
+更喜欢终端界面？试试 [RustNet](https://github.com/domcyrus/rustnet)。
 
-桌面会显式启用 `--headless-details full` 和 `--capture-accounting`。
-普通无界面运行保持上游 schema，并跳过额外的详细字段构建和覆盖统计。
-覆盖统计复用进程运行期间累计的抓包字节计数，每个处理批次发布一次已跟踪和已归属的帧字节总数。
-归属以处理数据包时的进程信息为准；之后发现的进程不会修改历史总数。
-debug 引擎覆盖必须支持这两个选项。更新后请重新构建旧的捆绑引擎。
+## 深入了解
 
-开发引擎时，在运行 `pnpm run desktop` 前将 `RUSTNET_ENGINE_SOURCE` 设置为包含上述
-改动的 RustNet 检出目录。脚本只构建，不应用补丁或修改其 Git 状态。
-也可以通过 `RUSTNET_DESKTOP_ENGINE` 使用已有的兼容二进制并跳过引擎构建。
-两种覆盖仅支持 debug；发布包必须使用固定版本。若缓存源码被修改，脚本会报错而不会
-重置。删除 `.engine/` 重新获取之前，请保存自己的改动。
+- [使用应用](docs/GUIDE.zh-CN.md#视图与录制)：视图、图表、搜索、快捷键和录制。
+- [GeoIP 配置](docs/GUIDE.zh-CN.md#geoip-数据库)：添加国家、ASN 及可选的城市查询。
+- [故障排查](docs/GUIDE.zh-CN.md#linux-渲染故障排查)：Linux 渲染问题；隔离构建另见[构建与抓包指南](BUILDING.zh-CN.md)。
+- [开发与打包](docs/GUIDE.zh-CN.md#引擎开发与更新)：引擎集成、[进程边界](docs/GUIDE.zh-CN.md#进程边界)和[发布检查](docs/GUIDE.zh-CN.md#验证与打包)。
+- [更新日志](CHANGELOG.zh-CN.md)：了解开发进展。
 
-## GeoIP 数据库
+## 一起完善桌面版
 
-引擎会在 `~/.local/share/rustnet/geoip/`（或
-`$XDG_DATA_HOME/rustnet/geoip/`）及标准系统目录中查找 GeoLite2 数据库。
-将 `GeoLite2-Country.mmdb`、`GeoLite2-ASN.mmdb` 和可选的
-`GeoLite2-City.mmdb` 放在这里，即可与 TUI 共用。仅位于终端当前工作目录的
-数据库可能无法被桌面应用发现。
+试用构建版本，并[告诉我们哪些地方好用、哪里遇到了困难](https://github.com/domcyrus/rustnet-desktop/issues)。
+请附上操作系统、操作步骤和相关错误输出。欢迎提交问题、改进文档、完善翻译或贡献代码。
+参与前请阅读[贡献指南](https://github.com/domcyrus/rustnet/blob/main/CONTRIBUTING.md)。
+如果 RustNet Desktop 对你有帮助，欢迎为仓库点亮 Star，或分享给希望了解网络流量的人。
 
-也可以打开抓包设置，点击 **Choose GeoIP folder**，选择包含这些文件的目录；
-允许只提供其中部分数据库。应用会记住选择，并将数据库绝对路径传给引擎。
-抓包期间点击 **Apply and restart capture**，或重新开始抓包以加载数据库。
-**Use automatic discovery** 恢复引擎默认搜索。无需下载数据库或提升桌面应用权限。
-若查询无结果（例如缺少城市数据），相应字段仍显示 Unavailable。
+### 路线图：签名版本
 
-## 抓包权限
+我们希望为 macOS 和 Windows 提供签名二进制文件，并为 macOS 版本完成公证。
+这可能需要一些资金支持，以支付代码签名相关费用。
+如果你愿意提供帮助，欢迎[发起讨论](https://github.com/domcyrus/rustnet-desktop/issues/new)。
 
-使用普通用户运行桌面应用，仅抓包引擎需要抓包权限。可选的 macOS 开发模式仅对引擎
-调用 sudo。桌面不会安装防火墙规则或禁用引擎沙箱。
-
-- **Linux：** 首次构建引擎后，按照 [INSTALL.md](https://github.com/domcyrus/rustnet/blob/main/INSTALL.md) 配置附带引擎的
-  capabilities。在此目录中，不使用 eBPF 的抓包配置示例（按需替换目标三元组）：
-
-  ```sh
-  sudo setcap cap_net_raw+eip src-tauri/binaries/rustnet-capture-engine-x86_64-unknown-linux-gnu
-  ```
-
-  复制或重新构建会清除文件 capabilities。开发时可将 `RUSTNET_DESKTOP_ENGINE`
-  设置为已配置权限、兼容的引擎绝对路径。此覆盖仅用于 debug 构建。
-  打包版本使用相邻的附带引擎；权限配置是独立的安装步骤，不会自动执行。
-- **macOS：** 使用 PKTAP 时，将已通过 Developer ID 签名和公证的应用安装到
-  `/Applications`。打开抓包设置，选择 **Enable capture helper**，然后在
-  **System Settings > General > Login Items & Extensions** 中批准 RustNet Desktop。
-  点击 **Recheck helper status**，选择 **Automatic** 后开始抓包。
-  `SMAppService` 辅助进程以 root 启动内置引擎；引擎打开抓包后降权至当前用户并启用
-  严格沙箱，界面始终以普通用户运行。当前引擎选择指定接口时不使用 PKTAP。
-  停止抓包后可点击 **Remove capture helper**。更新更改辅助程序或 launch-daemon plist 后，
-  请移除并重新启用辅助程序。未启用 sudo 开发模式的开发和临时签名构建使用普通 BPF 抓包和 `lsof` 进程归属。
-  按照 [INSTALL.md](https://github.com/domcyrus/rustnet/blob/main/INSTALL.md) 配置 BPF 权限；
-  ChmodBPF 本身不授予 PKTAP 权限，辅助进程批准与 BPF 权限是独立的设置。
-- **Windows：** 安装允许普通用户访问的 Npcap。若安装时限制为管理员访问，需要单独
-  配置权限。
-- **FreeBSD：** 现有 CLI 继续受支持；初版 Tauri 桌面应用不提供 FreeBSD 支持。
-
-选择接口并点击 **Start capture**。权限、驱动和抓包错误会显示在界面中。
-进程归属可能受到操作系统限制，无法归属的连接仍会显示。
-
-## macOS sudo 开发模式
-
-无需签名或公证即可使用 PKTAP，以普通用户执行：
-
-```sh
-node scripts/desktop-sudo.mjs
-```
-
-如需认证并复用现有 debug 构建，跳过编译和测试，请运行 `node scripts/desktop-sudo.mjs --no-build`。修改源码或依赖后请重新构建。
-
-启动器先完成隔离的离线 debug 构建和测试，然后才请求 sudo 认证。
-随后直接启动包含内嵌资源的桌面程序，不运行开发服务器或构建监视器。
-选择 **Automatic** 后开始抓包。只有引擎使用 sudo，界面保持普通用户权限。
-不会定期刷新凭据。前置条件、限制和重试说明见[隔离构建指南](BUILDING.zh-CN.md)。
-安装过依赖时，`pnpm run desktop:sudo` 仍可作为别名使用。
-
-## Linux 渲染故障排查
-
-如果整个窗口无响应或调整大小后出现黑色区域，请在终端按 Ctrl+C 停止当前开发运行，然后尝试：
-
-```bash
-pnpm run desktop:linux-compat
-```
-
-此 Linux 专用命令仅为本次启动设置 `WEBKIT_DISABLE_DMABUF_RENDERER=1`，用于测试
-[Tauri 文档中的 WebKitGTK 图形兼容方案](https://tauri-v2.netlify.app/develop/debug/linux-graphics/)。
-它不会更改默认启动方式、抓包权限或沙箱，只需重启桌面应用，无需重新构建捕获引擎。
-如果仍然卡住，请先收集终端输出以及 WebKitGTK 和显卡驱动版本，再尝试其他方案。
-仅凭黑色区域无法确定具体原因。
-
-## 视图与录制
-
-- **Applications** 默认打开 **All traffic**，显示总体图表、已追踪会话累计量、
-  连接/应用/主机数量及抓包覆盖情况。单击应用查看详情，双击按该分组筛选 Connections。
-  筛选包含匹配的保留历史连接；**Clear filter** 返回所有应用。
-- **Connections** 是连续滚动的可搜索表格，可按进程、PID、主机名、IP、端口或协议
-  进行词语搜索，不使用 TUI 筛选表达式。应用和连接默认按名称排序，点击速率标题可
-  实时按速率排序。单击连接查看详情，双击展开。
-- 检查器显示进程祖先、用户/组、容器元数据、服务/VLAN、主机名、GeoIP、DNS、TLS
-  和传输健康信息。未观测到的数据保持不可用。Linux 可保留启动时的可执行文件路径，
-  但新启动或无法访问的进程可能缺少路径。
-- 拖动检查器分隔条或使用左右方向键调整宽度。宽面板同时显示 Overview、Process 和
-  Protocol，窄面板使用选项卡。**Expand** 展开详情；关闭或按 Escape 返回时保留筛选。
-- 各视图的实时速率统一使用两秒移动平均，包含 Unattributed 流量。首次观察到的已有
-  连接先建立基线，关闭的连接退出实时汇总。**Show raw peaks** 显示区间速率，
-  **Log scale** 让小流量与大突发同时可见。快照无效时保留上一次有效视图，直到恢复。
-- 图表为所有应用保留最近 60 秒内最多 121 个样本，切换应用不会中断采样。
-  新抓包会话会清空图表。**Freeze view** 仅冻结显示，抓包和录制继续进行。
-- **Show breakdown graph** 比较捕获与已归属速率。覆盖统计使用含链路层头部的原始
-  帧长度，分为已归属、已追踪但未归属及追踪外字节。归属以处理数据包时为准，
-  连接过期不会删除累计量。追踪外差额包含待处理、跳过及队列丢弃的数据包，队列清空
-  时可能减少。未交付的数据包无法计量，VPN/全接口抓包可能重复计数。
-  覆盖累计量与连接字节计数不同。
-- 应用字节总量包含活跃及保留的已关闭连接，可能随历史过期而减少，并非完整会话
-  累计量。**Hosts** 按活跃连接的不同远端 IP 计数，不区分端口。应用按进程名分组，
-  已知的不同可执行文件路径保持独立；无法明确归属的缺失路径保留在路径不可用分组。
-- 点击抓包状态旁的来源按钮打开设置。Linux 在未保存偏好且可用时默认选择
-  **All interfaces (any)**。macOS 启用辅助程序后，**Automatic** 会尝试 PKTAP。
-  已保存接口不可用时需选择替代接口。**Apply and restart capture** 正常停止旧会话后
-  重新开始，录制需使用新文件。**Stop capture** 也在此处。
-- **History** (`t`) 在本地切换保留的已关闭连接，隐藏时仍显示数量。实时合计仅包含
-  活跃的已追踪连接，不含历史速率。引擎支持时，空闲连接会淡化并显示归档倒计时；
-  选中及活跃行保持清晰。
-- 开始前选择 **Record PCAPNG**，在保存对话框中指定未使用的文件名。录制使用引擎
-  带注释的导出器，不能追溯之前的流量。停止抓包以完成写入；导出错误或记录丢失
-  表示文件可能不完整。
-- 外观、首选视图、检查器宽度和上次成功请求的接口保存在本地，UI 不持久化流量快照。
-  沙箱状态和数据包计数位于侧栏 Capture Source 上方。
-- 鼠标后退/前进及 Alt+左/右恢复视图和选择。Connections 中，`/` 聚焦搜索，`g`/`G`
-  选择首行/末行，`Ctrl+f`/`Ctrl+b` 向下/向上移动一页。快捷键遵循筛选和排序，
-  不拦截文本框或下拉菜单输入。Escape 关闭检查器或外观面板。
-- 侧栏 **Help** 或 `h` 解释当前视图及快捷键。抓包设置和检查器也有各自的帮助。
-
-## 进程边界
-
-桌面只通过结构化参数直接或经已批准的 macOS 辅助程序启动附带的 `rustnet-capture-engine`。`--list-interfaces` 返回 JSON，
-不启动抓包。抓包使用 `--headless --output jsonl --include-historic --stop-on-stdin-close`。
-控制管道关闭时，包括桌面崩溃后，CLI 请求正常关闭并刷新输出。关闭窗口会等待引擎
-停止；15 秒后仍未退出的子进程会被终止，录制结果标记为可能不完整。
-
-macOS 辅助程序与应用通过相同 Team ID 和固定标识符的 Developer ID 签名要求验证 XPC 消息。
-辅助程序只接受长度受限的接口名和已打开的录制/GeoIP 文件描述符，不接受可执行文件路径、
-shell 命令或任意参数。降权身份来自经过认证的调用方，每个用户只允许一次捕获，
-XPC 断开时会停止捕获。特权捕获将内置引擎复制到 root 私有目录，验证签名后执行该受保护副本，
-不允许 debug 引擎覆盖。
-录制文件由普通用户以独占方式创建，用户 GeoIP 自动发现由应用在传递描述符之前完成。
-
-桥接层只保留最新快照，单条记录限制为 16 MiB，诊断输出有上限。界面每 500 ms
-串行轮询并验证 schema 1。Connections 使用连续表格；应用及其目标列表每页显示 75 项。
-数据包解析、进程查询、
-降权及沙箱仍由原有引擎负责。Webview 没有 shell 或通用文件系统插件权限。
-防火墙和进程终止操作不在初版范围内。
-
-## 验证与打包
-
-```sh
-pnpm run prepare:engine
-pnpm run build
-pnpm test
-pnpm run test:engine-source
-pnpm run test:macos-helper
-pnpm run test:application-icons
-pnpm run check:engine
-cargo fmt --manifest-path src-tauri/Cargo.toml --check
-cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
-cargo test --locked --manifest-path src-tauri/Cargo.toml
-pnpm audit
-cargo audit --file src-tauri/Cargo.lock
-pnpm run bundle
-```
-
-`pnpm run bundle` 构建 release CLI 和桌面程序，并将引擎包含在平台安装包中。
-未配置生产签名、公证凭证及 Linux/Windows 的自动抓包权限配置。macOS 安装包还包含
-辅助程序和 launch-daemon plist。构建可启用 PKTAP 的版本时，在 `pnpm run bundle` 前
-将 `APPLE_SIGNING_IDENTITY` 设置为 Developer ID Application 身份，并提供 Tauri 公证凭证
-（`APPLE_ID`、`APPLE_PASSWORD` 和 `APPLE_TEAM_ID`，或 Apple API 密钥凭证）。
-具体步骤见 [Tauri 签名与公证指南](https://v2.tauri.app/distribute/sign/macos/)。
-两个附带程序和应用须保留各自标识符，并使用相同 Team ID。
-未签名或临时签名构建可以编译，但不能启用特权辅助程序。
-`test:application-icons` 在 macOS、Linux 和 Windows 上检查原生图标。Linux 需要
-`xvfb`、`xauth` 和 SVG 加载器（Debian/Ubuntu 上为 `librsvg2-common`）。
-开发版本通过已安装的桌面条目和当前 GTK 主题获取 Linux 图标。通过 Flatpak、Snap
-或 shell 包装脚本启动的应用，如果无法可靠匹配可执行文件，可能仍显示占位图标。
-Windows 开发版本从可执行文件提取图标，必要时通过 PID 查找进程路径。
-无法访问的进程或未嵌入图标的文件仍显示占位图标。
-
-`test:macos-helper` 在 macOS 上运行普通用户的代理/描述符测试，在其他平台跳过，不安装守护程序。
-签名集成验证还需批准辅助程序，选择 Automatic 并确认快照的归属方式为 PKTAP，
-以及检查录制刷新、界面关闭和辅助程序移除。
-若 DMG 打包停在 Finder 布局步骤，可使用 `CI=true pnpm run bundle` 跳过该外观设置。
-修改引擎时，还需在 RustNet 仓库执行
-[CONTRIBUTING.md](https://github.com/domcyrus/rustnet/blob/main/CONTRIBUTING.md) 中的检查。
-
-当前 Tauri 的 Linux 依赖树会报告上游 RustSec 警告，包括停止维护的 crate 和
-GLib `VariantStrIter` 的健全性问题（RUSTSEC-2024-0429）。桌面检查不屏蔽这些警告；
-发布生产版本前请评估上游修复情况。
-
-## 依赖更新
-
-GitHub Dependabot 每天检查仓库根目录的 pnpm 依赖、`src-tauri` 中的 Cargo 依赖
-和 GitHub Actions。配置沿用 RustNet 的策略：按生态分组，包括主版本升级。包更新
-默认等待 3 天，主版本等待 7 天、次版本 4 天、补丁版本 3 天。安全更新不受等待期
-限制。合并前应审查 PR 和 CI 结果；未配置自动合并，无需安装外部应用。
-
-`engine.lock.json` 和临时引擎补丁仍需一起手动维护，Dependabot 不会更新已应用
-补丁的引擎提交版本。
+[Apache-2.0 许可证](LICENSE) · 基于 [RustNet](https://github.com/domcyrus/rustnet)
