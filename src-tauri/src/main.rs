@@ -21,6 +21,7 @@ struct Desktop {
 
 #[tauri::command]
 async fn application_icon(
+    _app: tauri::AppHandle,
     executable: Option<String>,
     name: String,
     pids: Vec<u32>,
@@ -31,11 +32,30 @@ async fn application_icon(
     {
         return Ok(None);
     }
-    tauri::async_runtime::spawn_blocking(move || {
-        application_icons::lookup(executable.as_deref(), &name, &pids)
-    })
-    .await
-    .map_err(|e| e.to_string())
+    #[cfg(target_os = "linux")]
+    {
+        let icon = tauri::async_runtime::spawn_blocking(move || {
+            application_icons::linux::find_icon(executable.as_deref(), &name, &pids)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        let Some(icon) = icon else { return Ok(None) };
+        let (send, receive) = tokio::sync::oneshot::channel();
+        // GTK objects must stay on the UI thread, including the active theme.
+        _app.run_on_main_thread(move || {
+            let _ = send.send(application_icons::linux::render_icon(&icon));
+        })
+        .map_err(|e| e.to_string())?;
+        receive.await.map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        tauri::async_runtime::spawn_blocking(move || {
+            application_icons::lookup(executable.as_deref(), &name, &pids)
+        })
+        .await
+        .map_err(|e| e.to_string())
+    }
 }
 
 #[tauri::command]

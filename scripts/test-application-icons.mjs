@@ -4,8 +4,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-if (process.platform !== "darwin") {
-  console.log("Native application icon tests require macOS; skipped on this platform.");
+if (process.platform === "linux") {
+  execFileSync("xvfb-run", ["-a", "cargo", "test", "--locked", "--manifest-path",
+    "src-tauri/Cargo.toml", "application_icons::linux::tests", "--", "--include-ignored",
+    "--test-threads=1"], { stdio: "inherit" });
+} else if (process.platform !== "darwin") {
+  console.log("Native application icon tests require macOS or Linux; skipped on this platform.");
 } else {
   const temporary = mkdtempSync(path.join(tmpdir(), "rustnet-icon-tests-"));
   try {

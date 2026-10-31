@@ -1,4 +1,8 @@
+#[cfg(target_os = "linux")]
+pub mod linux;
+
 // Keep platform-specific icon discovery behind the same optional PNG response.
+#[cfg(not(target_os = "linux"))]
 pub fn lookup(executable: Option<&str>, name: &str, pids: &[u32]) -> Option<String> {
     #[cfg(target_os = "macos")]
     {
