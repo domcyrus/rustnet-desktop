@@ -38,7 +38,7 @@ layout; capture controls require Tauri.
 
 ### Engine development and updates
 
-The private repository temporarily carries `engine/patches/0001-desktop-integration.patch`
+This repository temporarily carries `engine/patches/0001-desktop-integration.patch`
 for engine changes that have not landed upstream: interface discovery, supervised
 shutdown, retained history, richer metadata, and capture coverage. The original
 changes remain in the RustNet checkout for separate review. After they merge,
