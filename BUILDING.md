@@ -12,6 +12,8 @@ From the repository, without running `pnpm install` first:
 node scripts/isolated-build.mjs
 ```
 
+Debug desktop builds optimize the `serde_json` dependency to keep large snapshot validation efficient. Debug assertions, debug symbols, and the debug-only sudo capture launcher remain enabled.
+
 The launcher copies Git-tracked files into `.isolated-build/runs/build-*/work`, preserving local edits but rejecting symlinks and special files. Stage new source files with `git add` before building; untracked files are excluded. Common credential files (`.npmrc`, `.netrc`, `.env*`, `credentials` and `credentials.toml`) are excluded even if tracked. Do not commit other secrets into build inputs. It uses a private HOME, temporary directory, pnpm store, Cargo cache and build target directory. The original checkout, Git metadata, normal caches, SSH agent, signing keys and credential environment variables are not exposed to the sandbox. System tools and the selected Rust toolchain are readable but not writable. The working copy and private caches are writable.
 
 The fetch phase permits networking, downloads locked pnpm packages with lifecycle scripts and pnpmfile hooks disabled, fetches the pinned engine and verifies its patch hashes, and runs `cargo fetch --locked`. Private repositories and authenticated registries are deliberately unsupported. The fetch phase has network access, not a hostname allowlist.

@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Changed
+- Validate incoming capture JSON once and forward it through the raw IPC response; optimize JSON parsing in debug desktop builds.
 - Cache unchanged historic connection JSON in the capture engine, including extended metadata, with bounded retention and unchanged snapshot output.
 - Reduce snapshot processing with shared raw JSON and conditional polling; frozen or hidden views fetch only capture status and resume from the latest snapshot.
 - Reset selection before displaying a new capture session so the reset cannot overwrite the first application click.

@@ -20,7 +20,7 @@ const STOP_TIMEOUT: Duration = Duration::from_secs(15);
 
 type SharedView = Arc<Mutex<CaptureView>>;
 
-#[derive(Clone, Default, Serialize)]
+#[derive(Clone, Default)]
 pub struct CaptureView {
     pub session: u64,
     pub revision: u64,
@@ -32,18 +32,37 @@ pub struct CaptureView {
 
 // Keep the validated wire document intact instead of allocating a JSON tree.
 pub struct Snapshot {
-    json: Box<RawValue>,
+    json: String,
     status: String,
     error: Option<String>,
 }
 
-impl Serialize for Snapshot {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.json.serialize(serializer)
+// Send already validated JSON through Tauri's public response API. Serializing
+// Snapshot through RawValue would require validating the entire document again
+// just to construct an owned RawValue.
+pub struct CaptureResponse(pub Option<CaptureView>);
+
+impl tauri::ipc::IpcResponse for CaptureResponse {
+    fn body(self) -> tauri::Result<tauri::ipc::InvokeResponseBody> {
+        let Some(view) = self.0 else {
+            return Ok("null".to_owned().into());
+        };
+        // Serde escapes every metadata string. Only the snapshot, validated in
+        // full by decode_snapshot, is appended verbatim as an object.
+        let mut json = serde_json::to_string(&view.cursor())?;
+        json.pop(); // CaptureCursor always serializes as an object.
+        json.push_str(",\"snapshot\":");
+        json.push_str(
+            view.snapshot
+                .as_ref()
+                .map_or("null", |snapshot| &snapshot.json),
+        );
+        json.push('}');
+        Ok(json.into())
     }
 }
 
-#[derive(Deserialize, PartialEq, Eq)]
+#[derive(Deserialize, Serialize, PartialEq, Eq)]
 pub struct CaptureCursor {
     session: u64,
     revision: u64,
@@ -435,7 +454,20 @@ async fn diagnostics(mut reader: impl AsyncRead + Unpin) -> String {
     String::from_utf8_lossy(&tail).trim().to_string()
 }
 
-fn decode_snapshot(bytes: &[u8]) -> Result<Snapshot, String> {
+fn decode_snapshot(bytes: Vec<u8>) -> Result<Snapshot, String> {
+    let json = String::from_utf8(bytes).map_err(|e| format!("Invalid capture snapshot: {e}"))?;
+    let (status, error) = validate_snapshot(&json)?;
+    Ok(Snapshot {
+        json,
+        status,
+        error,
+    })
+}
+
+fn validate_snapshot(json: &str) -> Result<(String, Option<String>), String> {
+    if !json.trim_start().starts_with('{') {
+        return Err("Invalid capture snapshot: expected a JSON object".into());
+    }
     #[derive(Deserialize)]
     struct Header<'a> {
         schema_version: u64,
@@ -451,7 +483,7 @@ fn decode_snapshot(bytes: &[u8]) -> Result<Snapshot, String> {
         capture_error: Option<String>,
     }
     let value: Header<'_> =
-        serde_json::from_slice(bytes).map_err(|e| format!("Invalid capture snapshot: {e}"))?;
+        serde_json::from_str(json).map_err(|e| format!("Invalid capture snapshot: {e}"))?;
     if value.schema_version != 1
         || value.kind != "snapshot"
         || !value.connections.get().starts_with('[')
@@ -460,12 +492,7 @@ fn decode_snapshot(bytes: &[u8]) -> Result<Snapshot, String> {
             "Unsupported capture schema. Rebuild the desktop's bundled RustNet engine.".into(),
         );
     }
-    Ok(Snapshot {
-        json: serde_json::from_slice(bytes)
-            .map_err(|e| format!("Invalid capture snapshot: {e}"))?,
-        status: value.runtime.status,
-        error: value.runtime.capture_error,
-    })
+    Ok((value.runtime.status, value.runtime.capture_error))
 }
 
 async fn read_snapshots(
@@ -486,7 +513,10 @@ async fn read_snapshots(
         if count as u64 > MAX_RECORD_BYTES {
             return Err("Capture snapshot exceeded 16 MiB".into());
         }
-        let snapshot = decode_snapshot(&line)?;
+        // Transfer the record into the snapshot without another JSON scan or
+        // byte copy. Reserve the next read buffer at the observed record size.
+        let bytes = std::mem::replace(&mut line, Vec::with_capacity(count));
+        let snapshot = decode_snapshot(bytes)?;
         let mut view = view.lock().unwrap_or_else(|e| e.into_inner());
         // A late running snapshot cannot undo an explicit stop request.
         if view.status != "stopping" {
@@ -837,7 +867,7 @@ mod tests {
     #[test]
     fn incompatible_or_non_snapshot_output_is_rejected() {
         for line in [br#"{"schema_version":2,"type":"snapshot","connections":[],"runtime":{"status":"running"}}"#.as_slice(), b"not json", br#"{"schema_version":1,"type":"event"}"#] {
-            assert!(decode_snapshot(line).is_err());
+            assert!(decode_snapshot(line.to_vec()).is_err());
         }
     }
 
@@ -847,11 +877,11 @@ mod tests {
             let line = format!(
                 r#"{{"schema_version":1,"type":"snapshot","connections":{connections},"runtime":{{"status":"running"}}}}"#
             );
-            assert!(decode_snapshot(line.as_bytes()).is_err());
+            assert!(decode_snapshot(line.as_bytes().to_vec()).is_err());
         }
         let line = r#"{"schema_version":1,"type":"snapshot","connections":[{"future":{"text":"hello 🦀","counter":18446744073709551615}}],"runtime":{"status":"running","capture_error":null},"additive":[true,null]}"#;
-        let snapshot = Arc::new(decode_snapshot(line.as_bytes()).unwrap());
-        assert_eq!(serde_json::to_string(&snapshot).unwrap(), line);
+        let snapshot = Arc::new(decode_snapshot(line.as_bytes().to_vec()).unwrap());
+        assert_eq!(snapshot.json, line);
         let view = CaptureView {
             snapshot: Some(snapshot.clone()),
             ..CaptureView::default()
@@ -881,11 +911,68 @@ mod tests {
         assert!(view.update(Some(&known), false).is_none());
     }
 
-    // Supporting benchmark for the JSON hot path observed in a live stack sample.
+    #[test]
+    fn ipc_response_preserves_json_and_escapes_metadata() {
+        use tauri::ipc::IpcResponse;
+        let line = r#" {"connections":[{"text":"quotes \" and </script> 🦀","counter":18446744073709551615}],"runtime":{"status":"running"},"type":"snapshot","schema_version":1,"future":{"enabled":true}} "#;
+        let bytes = line.as_bytes().to_vec();
+        let allocation = bytes.as_ptr();
+        let snapshot = Arc::new(decode_snapshot(bytes).unwrap());
+        assert_eq!(snapshot.json.as_ptr(), allocation);
+        let view = CaptureView {
+            session: 7,
+            revision: 42,
+            status: "stopping".into(),
+            error: Some("error \"quoted\"\n🦀".into()),
+            export_path: Some("/tmp/\"capture\".pcapng".into()),
+            snapshot: Some(snapshot),
+        };
+        let expected_cursor = serde_json::to_value(view.cursor()).unwrap();
+        let body = CaptureResponse(Some(view.clone())).body().unwrap();
+        let tauri::ipc::InvokeResponseBody::Json(json) = body else {
+            panic!("expected JSON response")
+        };
+        assert!(json.contains(line));
+        let actual: Value = serde_json::from_str(&json).unwrap();
+        for (key, value) in expected_cursor.as_object().unwrap() {
+            assert_eq!(&actual[key], value);
+        }
+        assert_eq!(
+            actual["snapshot"],
+            serde_json::from_str::<Value>(line).unwrap()
+        );
+        let status_only = view.update(None, false).unwrap();
+        let status_only: Value = CaptureResponse(Some(status_only))
+            .body()
+            .unwrap()
+            .deserialize()
+            .unwrap();
+        assert!(status_only["snapshot"].is_null());
+        let unchanged: Value = CaptureResponse(None).body().unwrap().deserialize().unwrap();
+        assert!(unchanged.is_null());
+    }
+
+    #[test]
+    fn snapshot_validation_rejects_invalid_utf8_and_trailing_or_additive_data() {
+        let valid = r#"{"schema_version":1,"type":"snapshot","connections":[],"runtime":{"status":"running"}}"#;
+        assert!(decode_snapshot(br#"[1,"snapshot",[],{"status":"running"}]"#.to_vec()).is_err());
+        for suffix in ["{}", "false", "garbage"] {
+            assert!(decode_snapshot(format!("{valid}{suffix}").into_bytes()).is_err());
+        }
+        let malformed = valid.replace("\"connections\":[]", "\"connections\":[],\"future\":[1,]");
+        assert!(decode_snapshot(malformed.into_bytes()).is_err());
+        let mut invalid_utf8 = valid.as_bytes().to_vec();
+        invalid_utf8[2] = 0xff;
+        assert!(decode_snapshot(invalid_utf8).is_err());
+    }
+
+    // Keep the former two-scan path beside the new path for a reproducible
+    // comparison on identical synthetic documents, without restarting capture.
     #[test]
     #[ignore = "manual bridge benchmark; run with --ignored --nocapture"]
     fn benchmark_snapshot_bridge() {
         use std::{hint::black_box, time::Instant};
+        use tauri::ipc::IpcResponse;
         let connection = serde_json::json!({
             "id": "connection-123", "historic": true,
             "local": { "ip": "192.0.2.1", "port": 54321 },
@@ -895,31 +982,47 @@ mod tests {
             "protocol_details": [{ "label": "Server name", "value": "example.org", "warning": false }],
             "network_context": { "local_hostname": null, "remote_hostname": "example.org" }
         });
-        let bytes = serde_json::to_vec(&serde_json::json!({
-            "schema_version": 1, "type": "snapshot", "runtime": { "status": "running" },
-            "connections": vec![connection; 2000]
-        }))
-        .unwrap();
-        let iterations = 30;
-        let start = Instant::now();
-        for _ in 0..iterations {
-            let value: Value = serde_json::from_slice(black_box(&bytes)).unwrap();
-            let copy = black_box(&value).clone();
-            black_box(serde_json::to_vec(&copy).unwrap());
+        for count in [2_000, 10_000, 20_000] {
+            let bytes = serde_json::to_vec(&serde_json::json!({
+                "schema_version": 1, "type": "snapshot", "runtime": { "status": "running" },
+                "connections": vec![connection.clone(); count]
+            }))
+            .unwrap();
+            let mut before = Duration::ZERO;
+            let mut after = Duration::ZERO;
+            for iteration in 0..10 {
+                for old in if iteration % 2 == 0 {
+                    [true, false]
+                } else {
+                    [false, true]
+                } {
+                    let start = Instant::now();
+                    if old {
+                        black_box(
+                            validate_snapshot(std::str::from_utf8(black_box(&bytes)).unwrap())
+                                .unwrap(),
+                        );
+                        let raw: Box<RawValue> = serde_json::from_slice(black_box(&bytes)).unwrap();
+                        black_box(serde_json::to_string(&raw).unwrap());
+                        before += start.elapsed();
+                    } else {
+                        let view = CaptureView {
+                            snapshot: Some(Arc::new(
+                                decode_snapshot(black_box(bytes.clone())).unwrap(),
+                            )),
+                            ..CaptureView::default()
+                        };
+                        black_box(CaptureResponse(Some(view)).body().unwrap());
+                        after += start.elapsed();
+                    }
+                }
+            }
+            eprintln!(
+                "{} bytes, 10 iterations: previous {before:?}, single scan {after:?}, {:.2}x faster",
+                bytes.len(),
+                before.as_secs_f64() / after.as_secs_f64()
+            );
         }
-        let before = start.elapsed();
-        let start = Instant::now();
-        for _ in 0..iterations {
-            let value = Arc::new(decode_snapshot(black_box(&bytes)).unwrap());
-            let copy = black_box(&value).clone();
-            black_box(serde_json::to_vec(&copy).unwrap());
-        }
-        let after = start.elapsed();
-        eprintln!(
-            "{} bytes, {iterations} iterations: JSON tree {before:?}, raw snapshot {after:?}, {:.1}x faster",
-            bytes.len(),
-            before.as_secs_f64() / after.as_secs_f64()
-        );
     }
 
     #[tokio::test]
@@ -939,7 +1042,7 @@ mod tests {
         assert_eq!(view.revision, 2);
         assert_eq!(view.status, "stopping");
         assert_eq!(
-            serde_json::to_value(view.snapshot.as_ref().unwrap()).unwrap()["connections"],
+            serde_json::from_str::<Value>(&view.snapshot.as_ref().unwrap().json).unwrap()["connections"],
             serde_json::json!([])
         );
     }

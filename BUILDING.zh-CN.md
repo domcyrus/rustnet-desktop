@@ -12,6 +12,8 @@
 node scripts/isolated-build.mjs
 ```
 
+桌面调试构建会优化 `serde_json` 依赖，以降低大型快照的验证开销。调试断言、调试符号和仅限调试构建的 sudo 抓包启动器仍保持启用。
+
 启动器把 Git 已跟踪文件复制到 `.isolated-build/runs/build-*/work`，保留本地修改，但拒绝符号链接和特殊文件。构建前请用 `git add` 暂存新增源码；未跟踪文件不会复制。常见凭据文件（`.npmrc`、`.netrc`、`.env*`、`credentials` 和 `credentials.toml`）即使已跟踪也会排除。请勿把其他秘密信息提交为构建输入。它使用独立的 HOME、临时目录、pnpm 存储、Cargo 缓存及构建输出目录。沙箱无法访问原始检出目录、Git 元数据、常规缓存、SSH agent、签名密钥及环境变量中的凭据。系统工具和所选 Rust 工具链可读但不可写；工作副本和专用缓存可写。
 
 下载阶段允许联网，下载锁定的 pnpm 依赖，禁用生命周期脚本和 pnpmfile 钩子，获取固定的引擎版本并验证补丁哈希，然后执行 `cargo fetch --locked`。此流程不支持私有仓库或需要认证的 registry。下载阶段允许网络访问，并未限制为特定域名。
