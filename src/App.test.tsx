@@ -22,6 +22,18 @@ let availableInterfaces = [
   { name: "lo", description: "Loopback", addresses: ["127.0.0.1"] },
 ];
 beforeEach(() => {
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+    configurable: true,
+    value: function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    },
+  });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", {
+    configurable: true,
+    value: function (this: HTMLDialogElement) {
+      this.removeAttribute("open");
+    },
+  });
   const saved = new Map<string, string>();
   vi.stubGlobal("localStorage", {
     getItem: (key: string) => saved.get(key) ?? null,
@@ -45,18 +57,23 @@ beforeEach(() => {
   vi.mocked(invoke).mockImplementation(async (command, args) => {
     if (command === "list_interfaces") return availableInterfaces;
     if (command === "capture_view") {
-      const options = args as {
-        known?: Omit<typeof view, "snapshot">;
-        includeSnapshot?: boolean;
-      } | undefined;
+      const options = args as
+        | {
+            known?: Omit<typeof view, "snapshot">;
+            includeSnapshot?: boolean;
+          }
+        | undefined;
       const { snapshot, ...cursor } = view;
       const known = options?.known;
       if (
-        known && Object.entries(cursor).every(([key, value]) =>
-          (key === "revision" && options?.includeSnapshot === false) ||
-          known[key as keyof typeof known] === value,
+        known &&
+        Object.entries(cursor).every(
+          ([key, value]) =>
+            (key === "revision" && options?.includeSnapshot === false) ||
+            known[key as keyof typeof known] === value,
         )
-      ) return null;
+      )
+        return null;
       return {
         ...cursor,
         snapshot: options?.includeSnapshot === false ? null : snapshot,
@@ -89,6 +106,52 @@ async function selectOption(label: string, option: string) {
 }
 
 describe("desktop workflow", () => {
+  it("restores the list scroll and keyboard focus after inspecting, and resets for a new filter", async () => {
+    const { container } = render(<App />);
+    await screen.findByRole("button", { name: /Firefox.*1 connections/ });
+    fireEvent.click(screen.getByRole("button", { name: "Connections" }));
+    const list = container.querySelector<HTMLElement>(".table-scroll")!;
+    list.scrollTop = 240;
+    fireEvent.scroll(list);
+    const row = screen.getByRole("button", {
+      name: "Inspect Firefox connection to example.org",
+    });
+    fireEvent.click(row);
+    const detail = screen.getByRole("complementary", {
+      name: "Connection inspector",
+    });
+    expect(row.closest("tr")?.nextElementSibling?.contains(detail)).toBe(true);
+    expect(list.contains(detail)).toBe(true);
+    expect(list.scrollTop).toBe(240);
+    fireEvent.click(screen.getByRole("button", { name: "Close inspector" }));
+    expect(list.scrollTop).toBe(240);
+    expect(document.activeElement).toBe(row);
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Find connections" }),
+      { target: { value: "Firefox" } },
+    );
+    expect(list.scrollTop).toBe(0);
+  });
+  it("persists Prism display preferences and returns focus when settings close", async () => {
+    render(<App />);
+    await screen.findByRole("button", { name: /Firefox.*1 connections/ });
+    const trigger = screen.getByRole("button", { name: "Appearance" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const dialog = screen.getByRole("dialog", { name: "Appearance settings" });
+    await selectOption("Appearance", "Dark");
+    await selectOption("Scrollbars", "System default");
+    await selectOption("Connection rows", "Compact");
+    expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(localStorage.getItem("rustnet.scrollbars")).toBe("system");
+    expect(localStorage.getItem("rustnet.density")).toBe("compact");
+    fireEvent.keyDown(window, { key: "h" });
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    fireEvent(dialog, new Event("cancel", { cancelable: true }));
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+  });
+
   it("aligns the summary, overview and applications on counter-derived rates", async () => {
     view.snapshot!.stats.capture_accounting = {
       captured: 900000,
@@ -109,20 +172,36 @@ describe("desktop workflow", () => {
     const detail = () =>
       container.querySelector(".app-metrics .metric strong")!.textContent;
     await waitFor(() => expect(header()).toBe("1.5 kB/s"));
-    expect(detail()).toBe(header());
+    expect(
+      screen
+        .getByRole("img", { name: /Tracked traffic · last 60 seconds/ })
+        .getAttribute("aria-label"),
+    ).toContain(`Latest Download ${header()}`);
     fireEvent.click(screen.getByRole("button", { name: /Firefox.*1 kB\/s/ }));
     await waitFor(() => expect(detail()).toBe("1 kB/s"));
     fireEvent.click(screen.getByRole("button", { name: /All traffic/ }));
-    expect(detail()).toBe(header());
+    expect(
+      screen
+        .getByRole("img", { name: /Tracked traffic · last 60 seconds/ })
+        .getAttribute("aria-label"),
+    ).toContain(`Latest Download ${header()}`);
     fireEvent.click(screen.getByRole("button", { name: "Freeze view" }));
     view = structuredClone(view);
     view.revision++;
     view.snapshot!.timestamp = "2026-09-27T12:00:06Z";
     expect(header()).toBe("1.5 kB/s");
-    expect(detail()).toBe(header());
+    expect(
+      screen
+        .getByRole("img", { name: /Tracked traffic · last 60 seconds/ })
+        .getAttribute("aria-label"),
+    ).toContain(`Latest Download ${header()}`);
     fireEvent.click(screen.getByRole("button", { name: "Resume view" }));
     await waitFor(() => expect(header()).toBe("0 B/s"));
-    expect(detail()).toBe(header());
+    expect(
+      screen
+        .getByRole("img", { name: /Tracked traffic · last 60 seconds/ })
+        .getAttribute("aria-label"),
+    ).toContain(`Latest Download ${header()}`);
   });
   it("recovers from a malformed snapshot without retaining the bridge error or losing the last good view", async () => {
     render(<App />);
@@ -151,7 +230,12 @@ describe("desktop workflow", () => {
       attributed_sent: 100,
     };
     render(<App />);
-    await screen.findByRole("heading", { name: "All traffic" });
+    await screen.findByRole("button", { name: /All traffic/ });
+    expect(screen.getAllByText("All traffic")).toHaveLength(1);
+    expect(
+      screen.queryByRole("button", { name: "Collapse application details" }),
+    ).toBeNull();
+    expect(document.querySelector(".traffic-overview .app-metrics")).toBeNull();
     await screen.findByRole("region", { name: "Capture coverage" });
     expect(screen.getByText("40.0%")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Show raw peaks" }));
@@ -160,6 +244,7 @@ describe("desktop workflow", () => {
       screen.getByRole("button", { name: "Show smoothed rates" }),
     );
     expect(screen.getByText(/2-second moving average/)).toBeTruthy();
+    fireEvent.click(screen.getByText("How coverage is measured"));
     fireEvent.click(
       screen.getByRole("button", { name: "Show breakdown graph" }),
     );
@@ -169,10 +254,8 @@ describe("desktop workflow", () => {
     fireEvent.click(
       screen.getByRole("button", { name: /Firefox.*1 connections/ }),
     );
-    await screen.findByRole("heading", { name: "Firefox" });
-    fireEvent.click(
-      screen.getByRole("button", { name: /All trafficCapture coverage/ }),
-    );
+    await screen.findByLabelText("Firefox process details");
+    fireEvent.click(screen.getByRole("button", { name: /All traffic/ }));
     expect(screen.getByText("40.0%")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Freeze view" }));
     view = structuredClone(view);
@@ -464,7 +547,6 @@ describe("desktop workflow", () => {
       name: "Inspect Firefox connection to example.org",
     });
     fireEvent.click(row);
-    fireEvent.click(screen.getByRole("button", { name: "Process" }));
     expect(
       screen.getByRole("complementary", { name: "Connection inspector" })
         .textContent,
@@ -484,7 +566,6 @@ describe("desktop workflow", () => {
         name: "Inspect Firefox connection to example.org",
       }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Process" }));
     view = structuredClone(view);
     view.revision++;
     view.snapshot!.connections[0].hostname = "updated.example.org";
@@ -550,6 +631,13 @@ describe("desktop workflow", () => {
     render(<App />);
     await screen.findByRole("alert");
     expect(screen.getByRole("alert").textContent).toContain("CAP_NET_RAW");
+    fireEvent.click(screen.getByRole("button", { name: "Capture settings" }));
+    expect(
+      screen
+        .getByRole("dialog", { name: "Capture settings" })
+        .contains(screen.getByRole("alert")),
+    ).toBe(true);
+
     expect(
       screen
         .getByRole("button", { name: "Start capture" })
@@ -558,14 +646,17 @@ describe("desktop workflow", () => {
   });
   it("shows shutdown recovery instead of driver installation advice", async () => {
     view.status = "error";
-    view.error = "DNS worker did not stop before shutdown deadline: dns-resolver-2; runtime shutdown failed: 1 worker(s) timed out";
+    view.error =
+      "DNS worker did not stop before shutdown deadline: dns-resolver-2; runtime shutdown failed: 1 worker(s) timed out";
     render(<App />);
     const alert = await screen.findByRole("alert");
     expect(alert.textContent).toContain("dns-resolver-2");
     expect(alert.textContent).toContain("Any recording may be incomplete");
     expect(alert.textContent).not.toContain("install Npcap");
     expect(alert.textContent).not.toContain("configure capture capabilities");
-    expect(screen.getByRole("button", { name: /Firefox.*1 connections/ })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: /Firefox.*1 connections/ }),
+    ).toBeTruthy();
   });
   it("freezes displayed data while polling status without reporting stalled updates", async () => {
     render(<App />);
@@ -575,7 +666,9 @@ describe("desktop workflow", () => {
     await screen.findByRole("button", { name: /Firefox.*1 connections/ });
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() + 10000);
     fireEvent.click(screen.getByRole("button", { name: "Freeze view" }));
-    expect(screen.getByTitle("Live capture. Open capture settings")).toBeTruthy();
+    expect(
+      screen.getByTitle("Live capture. Open capture settings"),
+    ).toBeTruthy();
     clock.mockRestore();
     const previousPolls = vi
       .mocked(invoke)
@@ -600,20 +693,20 @@ describe("desktop workflow", () => {
     fireEvent.click(
       await screen.findByRole("button", { name: /Firefox.*1 connections/ }),
     );
-    await screen.findByRole("heading", { name: "Firefox" });
+    await screen.findByLabelText("Firefox process details");
     view = structuredClone(view);
     view.revision++;
     view.snapshot!.timestamp = "2026-09-27T12:00:04Z";
     view.snapshot!.connections[1].traffic.bytes_received += 200000;
     await screen.findByRole("button", { name: /Unattributed.*100 kB\/s/ });
-    expect(screen.getByRole("heading", { name: "Firefox" })).toBeTruthy();
+    expect(screen.getByLabelText("Firefox process details")).toBeTruthy();
   });
   it("clears the old session selection and accepts selection in the new session", async () => {
     render(<App />);
     fireEvent.click(
       await screen.findByRole("button", { name: /Firefox.*1 connections/ }),
     );
-    await screen.findByRole("heading", { name: "Firefox" });
+    await screen.findByLabelText("Firefox process details");
     view = structuredClone(view);
     view.session++;
     view.revision = 1;
@@ -621,10 +714,10 @@ describe("desktop workflow", () => {
     const newApp = await screen.findByRole("button", {
       name: /New session app.*1 connections/,
     });
-    expect(screen.getByRole("heading", { name: "All traffic" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /All traffic/ })).toBeTruthy();
     fireEvent.click(newApp);
-    await screen.findByRole("heading", { name: "New session app" });
-    expect(screen.queryByRole("heading", { name: "Firefox" })).toBeNull();
+    await screen.findByLabelText("New session app process details");
+    expect(screen.queryByLabelText("Firefox process details")).toBeNull();
   });
   it("defaults to any when offered, but preserves an explicitly saved automatic choice", async () => {
     view = { ...idle };
@@ -735,8 +828,8 @@ describe("desktop workflow", () => {
       "Recording flush failed",
     );
   });
-  it("expands, resizes with the keyboard, and closes the inspector without losing list filters", async () => {
-    render(<App />);
+  it("scrolls the shared pane from inspector buttons without changing the selection or editing search", async () => {
+    const { container } = render(<App />);
     await screen.findByRole("button", { name: /Firefox.*1 connections/ });
     fireEvent.click(screen.getByRole("button", { name: "Connections" }));
     const search = screen.getByRole("textbox", { name: "Find connections" });
@@ -746,25 +839,53 @@ describe("desktop workflow", () => {
         name: "Inspect Firefox connection to example.org",
       }),
     );
-    expect(screen.getByText("Remote endpoint")).toBeTruthy();
-    const resize = screen.getByRole("separator", {
-      name: "Resize connection inspector",
+    const list = container.querySelector<HTMLElement>(".table-scroll")!;
+    Object.defineProperties(list, {
+      clientHeight: { value: 400 },
+      scrollHeight: { value: 1600 },
     });
-    Object.defineProperty(resize.parentElement, "clientWidth", {
-      configurable: true,
-      value: 1100,
-    });
-    fireEvent.keyDown(resize, { key: "ArrowLeft" });
-    expect(localStorage.getItem("rustnet.inspector-width")).toBe("460");
-    fireEvent.click(screen.getByRole("button", { name: "Expand" }));
-    expect(screen.getByRole("button", { name: "Back to list" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Protocol" }));
-    expect(screen.getByText("Name evidence")).toBeTruthy();
+    const close = screen.getByRole("button", { name: "Close inspector" });
+    close.focus();
+    fireEvent.keyDown(close, { key: "ArrowDown" });
+    expect(list.scrollTop).toBe(40);
+    fireEvent.keyDown(close, { key: "PageDown" });
+    expect(list.scrollTop).toBe(380);
+    fireEvent.keyDown(close, { key: "ArrowUp" });
+    expect(list.scrollTop).toBe(340);
+    fireEvent.keyDown(search, { key: "ArrowDown" });
+    expect(list.scrollTop).toBe(340);
+    expect(screen.getByRole("heading", { name: "example.org" })).toBeTruthy();
+    fireEvent.keyDown(close, { key: "End" });
+    expect(list.scrollTop).toBe(1200);
+    fireEvent.keyDown(close, { key: "Home" });
+    expect(list.scrollTop).toBe(0);
     fireEvent.keyDown(window, { key: "Escape" });
     expect(
       screen.queryByRole("complementary", { name: "Connection inspector" }),
     ).toBeNull();
     expect((search as HTMLInputElement).value).toBe("Firefox");
+  });
+  it("keeps application details in the application list's only scroll pane", async () => {
+    const { container } = render(<App />);
+    const row = await screen.findByRole("button", {
+      name: /Firefox.*1 connections/,
+    });
+    fireEvent.click(row);
+    const pane = container.querySelector<HTMLElement>(".app-list")!;
+    const detail = container.querySelector<HTMLElement>(".app-detail")!;
+    expect(row.nextElementSibling).toBe(detail);
+    expect(pane.contains(detail)).toBe(true);
+    expect(pane.querySelector(".scroll-region")).toBeNull();
+    Object.defineProperties(pane, {
+      clientHeight: { value: 400 },
+      scrollHeight: { value: 1000 },
+    });
+    row.focus();
+    fireEvent.keyDown(row, { key: "ArrowDown" });
+    expect(pane.scrollTop).toBe(40);
+    fireEvent.click(row);
+    expect(container.querySelector(".app-detail")).toBeNull();
+    expect(document.activeElement).toBe(row);
   });
   it("keeps both lists alphabetical as rates change, then sorts by download on request", async () => {
     render(<App />);
@@ -822,16 +943,24 @@ describe("desktop workflow", () => {
       94,
     );
     expect(screen.queryByRole("button", { name: "Next" })).toBeNull();
-    fireEvent.click(screen.getByRole("cell", { name: /host-93.example.org/ }));
+    fireEvent.click(
+      screen
+        .getByText("host-93.example.org", { selector: ".hostname" })
+        .closest("td")!,
+    );
     expect(
       screen.getByRole("heading", { name: "host-93.example.org" }),
     ).toBeTruthy();
     fireEvent.doubleClick(
-      screen.getByRole("cell", { name: /host-93.example.org/ }),
+      screen
+        .getByText("host-93.example.org", { selector: ".hostname" })
+        .closest("td")!,
     );
-    expect(screen.getByRole("button", { name: "Back to list" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Close inspector" }),
+    ).toBeTruthy();
   });
-  it("opens expanded details directly by double-clicking an application destination", async () => {
+  it("opens inline details directly by double-clicking an application destination", async () => {
     render(<App />);
     fireEvent.click(
       await screen.findByRole("button", { name: /Firefox.*1 connections/ }),
@@ -842,6 +971,8 @@ describe("desktop workflow", () => {
     fireEvent.doubleClick(destination);
     expect(screen.getByRole("heading", { name: "Connections" })).toBeTruthy();
     expect(screen.getByRole("heading", { name: "example.org" })).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Back to list" })).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "Close inspector" }),
+    ).toBeTruthy();
   });
 });

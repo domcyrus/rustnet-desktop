@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { ArrowDownLeft, ArrowUpRight } from "lucide-react";
-import { ApplicationIcon } from "./ApplicationIcon";
 import { Chart } from "./Chart";
 import { Metric, Pagination, paginate } from "./components";
 import {
@@ -26,30 +25,23 @@ export function ApplicationDetails({
   totalRx: number;
   selected: string | null;
   onSelect: (id: string | null) => void;
-  onInspect: (id: string, expand?: boolean) => void;
+  onInspect: (id: string) => void;
 }) {
   const [page, setPage] = useState(0);
   const pagination = paginate(app.connections, page);
   return (
     <>
-      <div className="app-title">
-        <ApplicationIcon app={app} large />
-        <div>
-          <h2>{app.name}</h2>
-          <p className="subtitle">
-            {app.pids.length
-              ? `PIDs ${app.pids.slice(0, 8).join(", ")}${app.pids.length > 8 ? "…" : ""}`
-              : "Process owner unavailable"}
-          </p>
-        </div>
-      </div>
-      {app.executable && <p className="executable">{app.executable}</p>}
-      <p className="app-counts">
-        {app.connections.length} active connections · {app.pids.length} PIDs ·{" "}
-        <span title="Unique remote IP addresses across active connections">
-          {app.hosts} {app.hosts === 1 ? "host" : "hosts"}
+      <div
+        className="application-meta"
+        aria-label={`${app.name} process details`}
+      >
+        <span>
+          {app.pids.length
+            ? `PIDs ${app.pids.slice(0, 8).join(", ")}${app.pids.length > 8 ? "…" : ""}`
+            : "Process owner unavailable"}
         </span>
-      </p>
+        {app.executable && <code>{app.executable}</code>}
+      </div>
       <div className="app-metrics">
         <Metric
           icon={<ArrowDownLeft />}
@@ -85,7 +77,7 @@ export function ApplicationDetails({
         <div
           className="endpoint"
           key={c.id}
-          onDoubleClick={() => onInspect(c.id, true)}
+          onDoubleClick={() => onInspect(c.id)}
         >
           <button
             className="endpoint-summary"

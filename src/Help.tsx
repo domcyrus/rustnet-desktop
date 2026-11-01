@@ -23,7 +23,7 @@ const topics: Record<HelpContext, [string, string][]> = {
     ],
     [
       "Explore connections",
-      "Click an application for its traffic overview; double-click it to open Connections filtered to that application. Select a destination for a quick summary, or double-click to expand its inspector. Click Download rate to sort by live traffic; alphabetical order keeps the list steady.",
+      "Click an application for its traffic overview; double-click it to open Connections filtered to that application. Select a destination for a quick summary, or double-click to open its inline inspector. Click Download rate to sort by live traffic; alphabetical order keeps the list steady.",
     ],
   ],
   connections: [
@@ -33,7 +33,7 @@ const topics: Record<HelpContext, [string, string][]> = {
     ],
     [
       "Inspect a connection",
-      "Click anywhere on a row for details, or double-click to expand. Drag the divider to resize the inspector. Narrow windows show details in place of the list.",
+      "Click anywhere on a row for inline details. Click again or Collapse to close. The list and details share one scroll area. Arrow Up/Down, Page Up/Page Down and Home/End scroll it, including when a button has focus. Appearance offers comfortable or compact rows and comfortable or system scrollbars.",
     ],
     [
       "Closed connections",
@@ -58,8 +58,8 @@ const topics: Record<HelpContext, [string, string][]> = {
       "Protocol fields include observed TLS/SNI/ALPN and other application metadata. Transport health includes measured RTT, TCP retransmits, ACKs and receive windows; raw windows have unknown scaling when the handshake was missed. Name evidence distinguishes names observed in application traffic from names inferred from captured DNS. Encrypted application payloads are not decrypted.",
     ],
     [
-      "Make room",
-      "Wide panels show all sections together; compact panels use tabs. Expand gives details the full workspace. Back to list restores the list and side panel.",
+      "Inline details",
+      "Wide windows show Connection & traffic, Process, and Protocol & transport together in three columns. Narrow windows stack the groups. Show unobserved fields reveals missing metadata. Details share the list scrollbar; Collapse returns focus to the connection row.",
     ],
   ],
   capture: [
@@ -127,79 +127,105 @@ export function Help({
           <X size={18} />
         </button>
       </div>
-      <dl className="help-topics">
-        {topics[context].map(([title, text]) => (
-          <div key={title}>
-            <dt>{title}</dt>
-            <dd>{text}</dd>
-          </div>
-        ))}
-      </dl>
-      <h3>Mouse navigation</h3>
-      <dl className="help-shortcuts">
-        <div>
-          <dt>Back button</dt>
-          <dd>Return to the previous view or selection.</dd>
-        </div>
-        <div>
-          <dt>Forward button</dt>
-          <dd>Revisit the view or selection you went back from.</dd>
-        </div>
-      </dl>
-      <h3>Keyboard shortcuts</h3>
-      <dl className="help-shortcuts">
-        <div>
-          <dt>
-            <kbd>h</kbd>
-          </dt>
-          <dd>Open or close help for this view</dd>
-        </div>
-        <div>
-          <dt>
-            <kbd>/</kbd>
-          </dt>
-          <dd>Find connections</dd>
-        </div>
-        {(context === "connections" || context === "inspector") && (
-          <>
-            <div>
-              <dt>
-                <kbd>g</kbd> / <kbd>G</kbd>
-              </dt>
-              <dd>First / last filtered connection</dd>
+      <div className="help-body scroll-region">
+        <dl className="help-topics">
+          {topics[context].map(([title, text]) => (
+            <div key={title}>
+              <dt>{title}</dt>
+              <dd>{text}</dd>
             </div>
-            <div>
-              <dt>
-                <kbd>Ctrl+f</kbd> / <kbd>Ctrl+b</kbd>
-              </dt>
-              <dd>Next / previous page of connections</dd>
-            </div>
-          </>
-        )}
-        {(context === "connections" || context === "inspector") && (
+          ))}
+        </dl>
+        <h3>Mouse navigation</h3>
+        <dl className="help-shortcuts">
           <div>
             <dt>
-              <kbd>t</kbd>
+              <kbd>↑</kbd> / <kbd>↓</kbd>
             </dt>
-            <dd>Show / hide historic connections</dd>
+            <dd>Scroll the current content pane</dd>
           </div>
-        )}
-        <div>
-          <dt>
-            <kbd>Alt+←</kbd> / <kbd>Alt+→</kbd>
-          </dt>
-          <dd>Back / forward through navigation history</dd>
-        </div>
-        <div>
-          <dt>
-            <kbd>Esc</kbd>
-          </dt>
-          <dd>Close help, details, or settings</dd>
-        </div>
-      </dl>
-      <p className="help-note">
-        Letter shortcuts are inactive while typing or using dropdowns.
-      </p>
+          <div>
+            <dt>
+              <kbd>Page Up</kbd> / <kbd>Page Down</kbd>
+            </dt>
+            <dd>Scroll one page; Home/End jump to either end</dd>
+          </div>
+          <div>
+            <dt>Back button</dt>
+            <dd>Return to the previous view or selection.</dd>
+          </div>
+          <div>
+            <dt>Forward button</dt>
+            <dd>Revisit the view or selection you went back from.</dd>
+          </div>
+        </dl>
+        <h3>Keyboard shortcuts</h3>
+        <dl className="help-shortcuts">
+          <div>
+            <dt>
+              <kbd>↑</kbd> / <kbd>↓</kbd>
+            </dt>
+            <dd>Scroll the current content pane</dd>
+          </div>
+          <div>
+            <dt>
+              <kbd>Page Up</kbd> / <kbd>Page Down</kbd>
+            </dt>
+            <dd>Scroll one page; Home/End jump to either end</dd>
+          </div>
+          <div>
+            <dt>
+              <kbd>h</kbd>
+            </dt>
+            <dd>Open or close help for this view</dd>
+          </div>
+          <div>
+            <dt>
+              <kbd>/</kbd>
+            </dt>
+            <dd>Find connections</dd>
+          </div>
+          {(context === "connections" || context === "inspector") && (
+            <>
+              <div>
+                <dt>
+                  <kbd>g</kbd> / <kbd>G</kbd>
+                </dt>
+                <dd>First / last filtered connection</dd>
+              </div>
+              <div>
+                <dt>
+                  <kbd>Ctrl+f</kbd> / <kbd>Ctrl+b</kbd>
+                </dt>
+                <dd>Next / previous page of connections</dd>
+              </div>
+            </>
+          )}
+          {(context === "connections" || context === "inspector") && (
+            <div>
+              <dt>
+                <kbd>t</kbd>
+              </dt>
+              <dd>Show / hide historic connections</dd>
+            </div>
+          )}
+          <div>
+            <dt>
+              <kbd>Alt+←</kbd> / <kbd>Alt+→</kbd>
+            </dt>
+            <dd>Back / forward through navigation history</dd>
+          </div>
+          <div>
+            <dt>
+              <kbd>Esc</kbd>
+            </dt>
+            <dd>Close help, details, or settings</dd>
+          </div>
+        </dl>
+        <p className="help-note">
+          Letter shortcuts are inactive while typing or using dropdowns.
+        </p>
+      </div>
     </dialog>
   );
 }

@@ -1,71 +1,61 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { Inspector } from "./Inspector";
-import { richConnectionFixture, viewFixture } from "./test-fixtures";
+import {
+  connectionFixture,
+  richConnectionFixture,
+  viewFixture,
+} from "./test-fixtures";
 import { parseView } from "./model";
 
-let spacious = false;
-beforeEach(() => {
-  vi.stubGlobal(
-    "ResizeObserver",
-    class {
-      constructor(private callback: (entries: unknown[]) => void) {}
-      observe() {
-        this.callback([
-          { contentRect: { width: spacious ? 1300 : 400, height: 800 } },
-        ]);
-      }
-      disconnect() {}
-    },
+afterEach(cleanup);
+it("shows all three metadata groups together without a nested scroll pane", () => {
+  const { container } = render(
+    <Inspector connection={richConnectionFixture()} onClose={() => {}} />,
   );
-});
-afterEach(() => {
-  cleanup();
-  vi.unstubAllGlobals();
-  spacious = false;
-});
-const show = () =>
-  render(
-    <Inspector
-      connection={richConnectionFixture()}
-      expanded
-      onExpand={() => {}}
-      onClose={() => {}}
-    />,
-  );
-it("shows the same rich record together in a spacious inspector", () => {
-  spacious = true;
-  const { container } = show();
-  for (const label of [
-    "Network context",
-    "Process",
-    "Protocol",
-    "Transport health",
-    "TLS Version",
-    "Parent PID",
-    "Packets received",
-    "Captured DNS",
-    "user:user",
-    "83.97 kB",
-    "(raw, scale unknown)",
-  ]) {
-    expect(container.textContent).toContain(label);
-  }
-  expect(screen.queryByRole("button", { name: "Overview" })).toBeNull();
+  for (const name of [
+    "Connection and traffic",
+    "Process details",
+    "Protocol details",
+  ])
+    expect(screen.getByRole("region", { name })).toBeTruthy();
+  expect(screen.queryByRole("tablist")).toBeNull();
+  expect(container.querySelector(".scroll-region")).toBeNull();
+  expect(screen.getByRole("heading", { name: "Network context" })).toBeTruthy();
+  expect(container.textContent).toContain("Packets received");
+  expect(container.textContent).toContain("Captured DNS");
+  expect(screen.getByText("/usr/lib/firefox/firefox")).toBeTruthy();
+  expect(screen.getByText(/socket present when capture started/)).toBeTruthy();
   expect(container.querySelector(".process-lineage")?.textContent).toMatch(
     /systemd.*gnome-shell.*Firefox/,
   );
-});
-it("keeps all metadata reachable through compact tabs", () => {
-  show();
-  expect(screen.getByRole("heading", { name: "Network context" })).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Process" }));
-  expect(screen.getByText("/usr/lib/firefox/firefox")).toBeTruthy();
-  expect(screen.getByText(/socket present when capture started/)).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Protocol" }));
   expect(screen.getByText("TLS 1.3")).toBeTruthy();
   expect(screen.getByText("32.77 kB (raw, scale unknown)")).toBeTruthy();
+});
+it("hides unobserved metadata until requested and preserves disclosure during live updates", () => {
+  const connection = connectionFixture();
+  const { rerender } = render(
+    <Inspector connection={connection} onClose={() => {}} />,
+  );
+  expect(screen.queryByText("Parent PID")).toBeNull();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Show unobserved fields" }),
+  );
+  expect(screen.getByText("Parent PID")).toBeTruthy();
+  rerender(
+    <Inspector
+      connection={{ ...connection, state: "CLOSING" }}
+      onClose={() => {}}
+    />,
+  );
+  expect(
+    screen.getByRole("button", { name: "Hide unobserved fields" }),
+  ).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Hide unobserved fields" }),
+  );
+  expect(screen.queryByText("Parent PID")).toBeNull();
 });
 it("validates rich snapshots and rejects malformed nested metadata", () => {
   const view = viewFixture();
