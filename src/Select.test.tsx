@@ -72,3 +72,19 @@ it("closes when disabled and safely handles disappearing options", () => {
   rerender(<Select {...props} disabled />);
   expect(screen.queryByRole("listbox")).toBeNull();
 });
+it("keeps popup options in the modal's active subtree", () => {
+  render(
+    <dialog open aria-label="Settings">
+      <Select
+        label="Protocol"
+        value="all"
+        options={options}
+        onChange={() => {}}
+      />
+    </dialog>,
+  );
+  fireEvent.click(screen.getByRole("combobox"));
+  expect(screen.getByRole("listbox").closest("dialog")).toBe(
+    screen.getByRole("dialog"),
+  );
+});

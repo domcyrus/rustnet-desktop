@@ -177,14 +177,31 @@ further workarounds. Black areas alone do not establish the exact cause.
 - **Connections** is a continuous, searchable table. Search by process, PID,
   hostname, IP, port, or protocol using words, not TUI filter expressions.
   Applications and connections default to name order; click rate headings for live
-  rate sorting. Click a connection to inspect it or double-click to expand details.
+  rate sorting. Click a connection to open its inline details; click again or Collapse to close.
 - The inspector shows process ancestry, user/group, container metadata, service/VLAN,
   hostnames, GeoIP, DNS, TLS and transport health. Missing observations remain
   unavailable. Linux executable paths may be retained from startup, but newly
   started or inaccessible processes may lack them.
-- Drag the inspector divider or use Left/Right arrows to resize it. Wide inspectors
-  show Overview, Process and Protocol together; compact ones use tabs. **Expand**
-  opens focused details. Close or press Escape to return with filters preserved.
+- Prism uses lavender navigation, quieter panels, and purple/teal traffic accents in
+  light and dark themes. The connection table separates application/PID,
+  destination/status, download and upload so rate headings remain easy to click.
+- Connection details open beneath the selected row. Wide windows show Connection &
+  traffic, Process, and Protocol & transport together in three columns. Narrow
+  windows stack these groups. **Show unobserved fields** reveals missing metadata;
+  observed values and zero counters remain visible by default.
+- All traffic uses a compact graph beside session totals and coverage. Coverage
+  explanations expand on request, leaving application rows visible below the overview.
+  Each application has one identity row; its chevron opens or closes inline details.
+- Each view shares one scroll area between its
+  list and details. Navigation and workspace controls stay fixed. Up/Down, Page
+  Up/Page Down and Home/End scroll that area even when a button has focus, while
+  text fields and dropdowns retain their normal keys. Collapse returns focus to
+  the selected row. Changing connection filters resets the list to the top.
+- Appearance offers **Comfortable (12px)** scrollbar tracks with 8px rounded thumbs,
+  or **System default**, plus comfortable/compact connection rows. Scrollbars appear
+  only when content overflows; system visibility preferences may still hide them.
+  Capture settings, appearance and help use dialogs with a pinned heading and a
+  single scrolling body. Live updates do not reset the reading position.
 - Live rates use the same two-second moving average across views, including
   Unattributed traffic. Newly observed existing flows establish a baseline;
   closed connections leave the live sum. **Show raw peaks** reveals interval rates,
@@ -219,13 +236,13 @@ further workarounds. Black areas alone do not establish the exact cause.
 - Select **Record PCAPNG** before capture and choose an unused filename in the save
   dialog. Recording uses the engine's annotated exporter and is not retroactive.
   Stop capture to flush output; export errors or dropped records mean it may be incomplete.
-- Appearance, preferred view, inspector width and the last successfully requested
+- Appearance, scrollbar style, row density, preferred view and the last successfully requested
   interface are saved locally. Traffic snapshots are not persisted by the UI.
   Sandbox status and packet counters appear above Capture Source in the sidebar.
 - Mouse Back/Forward and Alt+Left/Right restore views and selections. In Connections,
   `/` focuses search, `g`/`G` select the first/last row, and `Ctrl+f`/`Ctrl+b` move
   down/up a page. Shortcuts respect the current filter and sort and do not intercept
-  text fields or dropdowns. Escape closes the inspector or appearance panel.
+  text fields or dropdowns. Scrolling keys move the current content pane. Escape closes the inspector or the current settings dialog.
 - **Help** in the sidebar or `h` explains the current view and its shortcuts.
   Capture settings and the inspector also have their own help.
 

@@ -4,7 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
-  type CSSProperties,
+  Fragment,
 } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import {
@@ -13,6 +13,8 @@ import {
   ArrowUpRight,
   Blocks,
   CircleHelp,
+  ChevronDown,
+  ChevronRight,
   History,
   Download,
   ListFilter,
@@ -31,13 +33,15 @@ import { useNavigation } from "./useNavigation";
 import { Select } from "./Select";
 import { Inspector } from "./Inspector";
 import { Help } from "./Help";
+import { PanelDialog } from "./PanelDialog";
 import { MacosHelper } from "./MacosHelper";
 import { WindowsHelper } from "./WindowsHelper";
 import { AllTraffic } from "./AllTraffic";
 import { ApplicationDetails } from "./ApplicationDetails";
 import { ApplicationIcon } from "./ApplicationIcon";
-import { ConnectionTable } from "./ConnectionTable";
-import { Metric, Pagination, Empty, paginate } from "./components";
+import { ConnectionTable, revealConnectionRow } from "./ConnectionTable";
+import { scrollPane } from "./scrollPane";
+import { Metric, Empty } from "./components";
 import {
   bytes,
   parseView,
@@ -74,7 +78,6 @@ export default function App() {
     connection: selectedConnection,
     application: selectedApplication,
     applicationFilter,
-    expanded,
   } = navigation;
   const [theme, setTheme] = useState<Theme>(() => {
     const value = preference("theme", "system");
@@ -83,20 +86,6 @@ export default function App() {
   const [settings, setSettings] = useState(false);
   const [help, setHelp] = useState(false);
   const [captureSettings, setCaptureSettings] = useState(false);
-  const [inspectorWidth, setInspectorWidth] = useState(() => {
-    const width = Number(preference("inspector-width", "440"));
-    return Number.isFinite(width) ? Math.max(320, Math.min(640, width)) : 440;
-  });
-  const workbench = useRef<HTMLDivElement>(null);
-  function resizeInspector(width: number) {
-    const limit = Math.max(
-      320,
-      Math.min(640, (workbench.current?.clientWidth ?? 1000) - 300),
-    );
-    const next = Math.round(Math.max(320, Math.min(limit, width)));
-    setInspectorWidth(next);
-    savePreference("inspector-width", String(next));
-  }
   const {
     view,
     display,
@@ -123,9 +112,23 @@ export default function App() {
   const [historic, setHistoric] = useState(false);
   const [sort, setSort] = useState<Sort>("process");
   const [appSort, setAppSort] = useState<"name" | "download">("name");
-  const [appPage, setAppPage] = useState(0);
+  const [applicationOpen, setApplicationOpen] = useState(true);
   const search = useRef<HTMLInputElement>(null);
   const connectionScroll = useRef<HTMLDivElement>(null);
+  const connectionScrollTop = useRef(0);
+  const lastConnection = useRef<string | null>(null);
+  const appList = useRef<HTMLDivElement>(null);
+  const appScrollTop = useRef(0);
+  const [scrollbars, setScrollbars] = useState(() =>
+    preference("scrollbars", "comfortable") === "system"
+      ? "system"
+      : "comfortable",
+  );
+  const [density, setDensity] = useState(() =>
+    preference("density", "comfortable") === "compact"
+      ? "compact"
+      : "comfortable",
+  );
   const active = ["starting", "running", "stopping"].includes(view.status);
   const snapshot = display.rates.view.snapshot;
   const all = snapshot?.connections ?? [];
@@ -140,7 +143,6 @@ export default function App() {
       ),
     [display.apps, appSort],
   );
-  const pagedApps = paginate(apps, appPage);
   const duplicateAppNames = useMemo(() => {
     const seen = new Set<string>();
     const duplicates = new Set<string>();
@@ -207,13 +209,12 @@ export default function App() {
     navigate(
       {
         connection: null,
-        expanded: false,
+
         application: null,
         applicationFilter: null,
       },
       true,
     );
-    setAppPage(0);
   }, [view.session, navigate]);
   const appPoints = display.appHistory.get(app?.key || "") || [];
   useEffect(() => {
@@ -224,11 +225,61 @@ export default function App() {
     savePreference("screen", screen);
   }, [screen]);
   useEffect(() => {
+    document.documentElement.dataset.scrollbars = scrollbars;
+    document.documentElement.dataset.density = density;
+    savePreference("scrollbars", scrollbars);
+    savePreference("density", density);
+  }, [scrollbars, density]);
+  useLayoutEffect(() => {
+    connectionScrollTop.current = 0;
     if (connectionScroll.current) connectionScroll.current.scrollTop = 0;
-  }, [query, protocol, historic, sort, applicationFilter]);
+  }, [query, protocol, historic, sort, applicationFilter, view.session]);
+  useLayoutEffect(() => {
+    setApplicationOpen(true);
+  }, [selectedApplication]);
+  useLayoutEffect(() => {
+    appScrollTop.current = 0;
+    if (appList.current) appList.current.scrollTop = 0;
+  }, [appSort, view.session]);
+  useLayoutEffect(() => {
+    if (connectionScroll.current)
+      connectionScroll.current.scrollTop = connectionScrollTop.current;
+    if (appList.current) appList.current.scrollTop = appScrollTop.current;
+  }, [screen]);
+  useLayoutEffect(() => {
+    const list = connectionScroll.current;
+    if (!list) return;
+    const id = selectedConnection || lastConnection.current;
+    const row = Array.from(
+      list.querySelectorAll<HTMLTableRowElement>("tr[data-connection-id]"),
+    ).find((row) => row.dataset.connectionId === id);
+    if (row) {
+      revealConnectionRow(row);
+      // Keep a little list context above the opened details.
+      if (selectedConnection && list.clientHeight > 0) {
+        const top =
+          row.getBoundingClientRect().top - list.getBoundingClientRect().top;
+        const heading =
+          list.querySelector("thead")?.getBoundingClientRect().height || 42;
+        list.scrollTop += Math.max(0, top - heading - 60);
+      }
+      row
+        .querySelector<HTMLButtonElement>("button")
+        ?.focus({ preventScroll: true });
+    }
+    lastConnection.current = selectedConnection;
+  }, [screen, selectedConnection]);
   useEffect(() => {
     function keydown(event: KeyboardEvent) {
       if (event.defaultPrevented) return;
+      const dialog = document.querySelector<HTMLDialogElement>("dialog[open]");
+      const pane = dialog
+        ? dialog.querySelector<HTMLElement>(".scroll-region")
+        : screen === "connections"
+          ? connectionScroll.current
+          : appList.current;
+      if (scrollPane(event, pane)) return;
+      if (document.querySelector(".panel-dialog[open]")) return;
       const editable =
         event.target instanceof HTMLInputElement ||
         event.target instanceof HTMLSelectElement ||
@@ -250,7 +301,7 @@ export default function App() {
         setHelp((open) => !open);
         return;
       }
-      if (help) return;
+      if (help || document.querySelector("dialog[open]")) return;
       if (
         !editable &&
         screen === "connections" &&
@@ -284,8 +335,9 @@ export default function App() {
           event.preventDefault();
           const table = connectionScroll.current;
           const rowHeight =
-            table?.querySelector("tbody tr")?.getBoundingClientRect().height ||
-            60;
+            table
+              ?.querySelector("tbody tr[data-connection-id]")
+              ?.getBoundingClientRect().height || 60;
           const pageSize = Math.max(
             1,
             Math.floor(
@@ -313,9 +365,11 @@ export default function App() {
             selectedConnection !== null,
           );
           requestAnimationFrame(() => {
-            connectionScroll.current
-              ?.querySelectorAll("tbody tr")
-              [index]?.scrollIntoView({ block: "center" });
+            revealConnectionRow(
+              connectionScroll.current?.querySelectorAll<HTMLTableRowElement>(
+                "tbody tr[data-connection-id]",
+              )[index],
+            );
           });
         }
       }
@@ -327,7 +381,7 @@ export default function App() {
       if (event.key === "Escape") {
         setSettings(false);
         setCaptureSettings(false);
-        navigate({ expanded: false, connection: null });
+        navigate({ connection: null });
         if (editable) (event.target as HTMLElement).blur();
       }
     }
@@ -428,6 +482,69 @@ export default function App() {
           error: "Capture failed",
         }[view.status] || view.status;
 
+  const captureNotice = captureError && (
+    <div className="notice error" role="alert">
+      <strong>Capture needs attention</strong>
+      <p>{captureError}</p>
+      {bridgeError && !error ? (
+        <p>
+          The last valid snapshot is shown. Capture may still be running; the
+          display will recover automatically when valid data arrives.
+        </p>
+      ) : shutdownError ? (
+        <p>
+          Capture did not finish cleanly. Any recording may be incomplete.
+          Restart the desktop with the latest build before trying again.
+        </p>
+      ) : (
+        <p>
+          Linux: configure capture capabilities on the bundled engine. macOS:
+          configure BPF access. Windows: install Npcap. Keep the desktop running
+          as your regular user. See the desktop setup guide.
+        </p>
+      )}
+      {error && <button onClick={() => setError(null)}>Dismiss</button>}
+    </div>
+  );
+
+  const applicationDetails = applicationOpen && (
+    <div className="app-detail">
+      {selectedApplication === null ? (
+        <AllTraffic snapshot={snapshot} history={display.history} />
+      ) : app ? (
+        <ApplicationDetails
+          key={app.key}
+          app={app}
+          points={appPoints}
+          totalRx={rx}
+          selected={selectedConnection}
+          onSelect={(connection) => navigate({ connection }, true)}
+          onInspect={(id) => {
+            navigate({
+              screen: "connections",
+              connection: id,
+              applicationFilter: null,
+            });
+            setQuery("");
+            setProtocol("all");
+          }}
+        />
+      ) : (
+        <div className="empty">
+          <Activity size={28} />
+          <h2>No active connections</h2>
+          <p>The selected application is no longer active in this capture.</p>
+          <button
+            className="button"
+            onClick={() => navigate({ application: null })}
+          >
+            Select an active application
+          </button>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div
       className={`desktop ${screen === "connections" ? "connections-screen" : ""}`}
@@ -447,7 +564,6 @@ export default function App() {
               navigate({
                 screen: "applications",
                 connection: null,
-                expanded: false,
               })
             }
           >
@@ -461,7 +577,6 @@ export default function App() {
                 screen: "connections",
                 applicationFilter: null,
                 connection: null,
-                expanded: false,
               })
             }
           >
@@ -587,161 +702,185 @@ export default function App() {
           </div>
         </header>
         {settings && (
-          <section className="settings-panel" aria-label="Appearance">
-            <label>
-              Appearance
-              <Select
-                label="Appearance"
-                value={theme}
-                onChange={(value) => setTheme(value as Theme)}
-                options={[
-                  { value: "system", label: "System" },
-                  { value: "light", label: "Light" },
-                  { value: "dark", label: "Dark" },
-                ]}
-              />
-            </label>
-            <button
-              className="icon-button"
-              aria-label="Close appearance settings"
-              onClick={() => setSettings(false)}
-            >
-              <X size={16} />
-            </button>
-          </section>
+          <PanelDialog
+            title="Appearance settings"
+            onClose={() => setSettings(false)}
+          >
+            <section className="settings-panel" aria-label="Appearance">
+              <label>
+                Appearance
+                <Select
+                  label="Appearance"
+                  value={theme}
+                  onChange={(value) => setTheme(value as Theme)}
+                  options={[
+                    { value: "system", label: "System" },
+                    { value: "light", label: "Light" },
+                    { value: "dark", label: "Dark" },
+                  ]}
+                />
+              </label>
+              <label>
+                Scrollbars
+                <Select
+                  label="Scrollbars"
+                  value={scrollbars}
+                  onChange={setScrollbars}
+                  options={[
+                    { value: "comfortable", label: "Comfortable (12px)" },
+                    { value: "system", label: "System default" },
+                  ]}
+                />
+              </label>
+              <label>
+                Connection rows
+                <Select
+                  label="Connection rows"
+                  value={density}
+                  onChange={setDensity}
+                  options={[
+                    { value: "comfortable", label: "Comfortable" },
+                    { value: "compact", label: "Compact" },
+                  ]}
+                />
+              </label>
+            </section>
+          </PanelDialog>
         )}
         {captureSettings && (
-          <section className="capture-bar" aria-label="Capture controls">
-            {active && (
-              <div className="capture-session">
+          <PanelDialog
+            title="Capture settings"
+            onClose={() => setCaptureSettings(false)}
+          >
+            {captureNotice}
+            <section className="capture-bar" aria-label="Capture controls">
+              {active && (
+                <div className="capture-session">
+                  <div>
+                    <strong>{statusLabel}</strong>
+                    <small>
+                      Freeze view pauses the display. Stop capture ends the
+                      session and finishes recording.
+                    </small>
+                  </div>
+                  <button
+                    className="button stop"
+                    onClick={() => void toggleCapture()}
+                    disabled={busy || view.status === "stopping" || !isTauri()}
+                  >
+                    <Square size={15} />
+                    {busy ? "Please wait…" : "Stop capture"}
+                  </button>
+                </div>
+              )}
+              <label className="interface-picker">
+                <Radio size={16} />
+                <span className="sr-only">Capture interface</span>
+                <Select
+                  label="Capture interface"
+                  value={chosenInterface}
+                  disabled={busy || interfaceLoading}
+                  onChange={setInterfaceName}
+                  options={[
+                    { value: "", label: "Automatic" },
+                    ...(interfaces.some((i) => i.name === "any")
+                      ? [{ value: "any", label: "All interfaces (any)" }]
+                      : []),
+                    ...(interfaceMissing
+                      ? [
+                          {
+                            value: chosenInterface,
+                            label: `${chosenInterface} · unavailable`,
+                          },
+                        ]
+                      : []),
+                    ...interfaces
+                      .filter((i) => i.name !== "any")
+                      .map((i) => ({
+                        value: i.name,
+                        label: i.description
+                          ? `${i.name} · ${i.description}`
+                          : i.name,
+                      })),
+                  ]}
+                />
+              </label>
+              <button
+                className="icon-button"
+                aria-label="Refresh interfaces"
+                disabled={busy || interfaceLoading || !isTauri()}
+                onClick={() => void refreshInterfaces()}
+              >
+                <RefreshCw
+                  size={16}
+                  className={interfaceLoading ? "spin" : ""}
+                />
+              </button>
+              <label className="record-toggle">
+                <input
+                  type="checkbox"
+                  checked={record}
+                  disabled={busy}
+                  onChange={(e) => setRecord(e.target.checked)}
+                />
+                <Download size={15} />
+                Record PCAPNG
+              </label>
+              {active && (
+                <button
+                  className="button"
+                  onClick={() => void restartCapture()}
+                  disabled={
+                    busy ||
+                    interfaceLoading ||
+                    interfaceMissing ||
+                    view.status !== "running"
+                  }
+                >
+                  Apply and restart capture
+                </button>
+              )}
+              <MacosHelper active={active || busy} />
+              <WindowsHelper />
+              <div className="geoip-settings">
                 <div>
-                  <strong>{statusLabel}</strong>
+                  <strong>GeoIP databases</strong>
+                  <p>
+                    {geoipDirectory ||
+                      "Automatic discovery in user and system folders"}
+                  </p>
                   <small>
-                    Freeze view pauses the display. Stop capture ends the
-                    session and finishes recording.
+                    Local GeoLite2 databases provide country, city and ASN
+                    information.
                   </small>
                 </div>
                 <button
-                  className="button stop"
-                  onClick={() => void toggleCapture()}
-                  disabled={busy || view.status === "stopping" || !isTauri()}
-                >
-                  <Square size={15} />
-                  {busy ? "Please wait…" : "Stop capture"}
-                </button>
-              </div>
-            )}
-            <label className="interface-picker">
-              <Radio size={16} />
-              <span className="sr-only">Capture interface</span>
-              <Select
-                label="Capture interface"
-                value={chosenInterface}
-                disabled={busy || interfaceLoading}
-                onChange={setInterfaceName}
-                options={[
-                  { value: "", label: "Automatic" },
-                  ...(interfaces.some((i) => i.name === "any")
-                    ? [{ value: "any", label: "All interfaces (any)" }]
-                    : []),
-                  ...(interfaceMissing
-                    ? [
-                        {
-                          value: chosenInterface,
-                          label: `${chosenInterface} · unavailable`,
-                        },
-                      ]
-                    : []),
-                  ...interfaces
-                    .filter((i) => i.name !== "any")
-                    .map((i) => ({
-                      value: i.name,
-                      label: i.description
-                        ? `${i.name} · ${i.description}`
-                        : i.name,
-                    })),
-                ]}
-              />
-            </label>
-            <button
-              className="icon-button"
-              aria-label="Refresh interfaces"
-              disabled={busy || interfaceLoading || !isTauri()}
-              onClick={() => void refreshInterfaces()}
-            >
-              <RefreshCw size={16} className={interfaceLoading ? "spin" : ""} />
-            </button>
-            <label className="record-toggle">
-              <input
-                type="checkbox"
-                checked={record}
-                disabled={busy}
-                onChange={(e) => setRecord(e.target.checked)}
-              />
-              <Download size={15} />
-              Record PCAPNG
-            </label>
-            {active && (
-              <button
-                className="button"
-                onClick={() => void restartCapture()}
-                disabled={
-                  busy ||
-                  interfaceLoading ||
-                  interfaceMissing ||
-                  view.status !== "running"
-                }
-              >
-                Apply and restart capture
-              </button>
-            )}
-            <button
-              className="icon-button"
-              aria-label="Close capture settings"
-              onClick={() => setCaptureSettings(false)}
-            >
-              <X size={16} />
-            </button>
-            <MacosHelper active={active || busy} />
-            <WindowsHelper />
-            <div className="geoip-settings">
-              <div>
-                <strong>GeoIP databases</strong>
-                <p>
-                  {geoipDirectory ||
-                    "Automatic discovery in user and system folders"}
-                </p>
-                <small>
-                  Local GeoLite2 databases provide country, city and ASN
-                  information.
-                </small>
-              </div>
-              <button
-                className="button"
-                disabled={busy || !isTauri()}
-                onClick={() => void chooseGeoipDirectory()}
-              >
-                Choose GeoIP folder
-              </button>
-              {geoipDirectory && (
-                <button
                   className="button"
-                  disabled={busy}
-                  onClick={() => {
-                    setGeoipDirectory("");
-                    savePreference("geoip-directory", "");
-                  }}
+                  disabled={busy || !isTauri()}
+                  onClick={() => void chooseGeoipDirectory()}
                 >
-                  Use automatic discovery
+                  Choose GeoIP folder
                 </button>
-              )}
-            </div>
-            <p className="capture-hint">
-              {active
-                ? "Changes apply only when you restart capture. Recording will use a new file."
-                : "Choose a source, then start capture."}
-            </p>
-          </section>
+                {geoipDirectory && (
+                  <button
+                    className="button"
+                    disabled={busy}
+                    onClick={() => {
+                      setGeoipDirectory("");
+                      savePreference("geoip-directory", "");
+                    }}
+                  >
+                    Use automatic discovery
+                  </button>
+                )}
+              </div>
+              <p className="capture-hint">
+                {active
+                  ? "Changes apply only when you restart capture. Recording will use a new file."
+                  : "Choose a source, then start capture."}
+              </p>
+            </section>
+          </PanelDialog>
         )}
         {interfaceMissing && (
           <div className="notice warning">
@@ -755,31 +894,7 @@ export default function App() {
             no access to the capture engine.
           </div>
         )}
-        {captureError && (
-          <div className="notice error" role="alert">
-            <strong>Capture needs attention</strong>
-            <p>{captureError}</p>
-            {bridgeError && !error ? (
-              <p>
-                The last valid snapshot is shown. Capture may still be running;
-                the display will recover automatically when valid data arrives.
-              </p>
-            ) : shutdownError ? (
-              <p>
-                Capture did not finish cleanly. Any recording may be incomplete.
-                Restart the desktop with the latest build before trying again.
-              </p>
-            ) : (
-              <p>
-                Linux: configure capture capabilities on the bundled engine.
-                macOS: configure BPF access. Windows: install Npcap. Keep the
-                desktop running as your regular user. See the desktop setup
-                guide.
-              </p>
-            )}
-            {error && <button onClick={() => setError(null)}>Dismiss</button>}
-          </div>
-        )}
+        {!captureSettings && captureNotice}
         {view.snapshot?.runtime.process_detection.degraded && (
           <div className="notice warning">
             Process detection is limited:{" "}
@@ -840,13 +955,7 @@ export default function App() {
           </div>
         )}
         {screen === "connections" ? (
-          <div
-            ref={workbench}
-            className={`workbench ${selectedConnection ? "with-inspector" : ""} ${expanded && selectedConnection ? "expanded-inspector" : ""}`}
-            style={
-              { "--inspector-width": `${inspectorWidth}px` } as CSSProperties
-            }
-          >
+          <div className="workbench">
             <section className="connection-list" aria-label="Connections">
               <section className="filter-bar" aria-label="Connection filters">
                 <label className="search">
@@ -910,25 +1019,42 @@ export default function App() {
                   </button>
                 </div>
               )}
-              <div className="table-scroll" ref={connectionScroll}>
+              <div
+                className="table-scroll scroll-region"
+                ref={connectionScroll}
+                onScroll={(event) => {
+                  if (event.currentTarget.clientHeight > 0)
+                    connectionScrollTop.current = event.currentTarget.scrollTop;
+                }}
+              >
+                {selectedConnection &&
+                  !filtered.some((c) => c.id === selectedConnection) && (
+                    <div className="detached-inspector">
+                      <p className="inspector-note">
+                        Selected connection is outside the current list.
+                      </p>
+                      <Inspector
+                        connection={connection}
+                        onClose={() => navigate({ connection: null })}
+                      />
+                    </div>
+                  )}
                 <ConnectionTable
                   filtered={filtered}
                   sort={sort}
                   setSort={setSort}
                   selectedConnection={selectedConnection}
-                  onSelect={(connection, expanded) =>
-                    navigate({ connection, expanded }, expanded)
-                  }
+                  onSelect={(connection) => navigate({ connection })}
                 />
+                {!filtered.length && (
+                  <Empty
+                    active={active}
+                    filtered={Boolean(
+                      applicationFilter || query || protocol !== "all",
+                    )}
+                  />
+                )}
               </div>
-              {!filtered.length && (
-                <Empty
-                  active={active}
-                  filtered={Boolean(
-                    applicationFilter || query || protocol !== "all",
-                  )}
-                />
-              )}
               <div className="list-footer">
                 <span>
                   {filtered.length.toLocaleString()} connections
@@ -936,110 +1062,75 @@ export default function App() {
                 </span>
               </div>
             </section>
-            {selectedConnection && (
-              <>
-                <div
-                  role="separator"
-                  aria-label="Resize connection inspector"
-                  aria-orientation="vertical"
-                  aria-valuemin={320}
-                  aria-valuemax={640}
-                  aria-valuenow={inspectorWidth}
-                  tabIndex={0}
-                  className="inspector-resizer"
-                  onPointerDown={(e) => {
-                    e.currentTarget.setPointerCapture(e.pointerId);
-                  }}
-                  onPointerMove={(e) => {
-                    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
-                      resizeInspector(
-                        (workbench.current?.getBoundingClientRect().right ??
-                          0) - e.clientX,
-                      );
-                    }
-                  }}
-                  onPointerUp={(e) =>
-                    e.currentTarget.releasePointerCapture(e.pointerId)
-                  }
-                  onKeyDown={(e) => {
-                    if (
-                      ["ArrowLeft", "ArrowRight", "Home", "End"].includes(e.key)
-                    ) {
-                      e.preventDefault();
-                      resizeInspector(
-                        e.key === "Home"
-                          ? 320
-                          : e.key === "End"
-                            ? 640
-                            : inspectorWidth +
-                              (e.key === "ArrowLeft" ? 20 : -20),
-                      );
-                    }
-                  }}
-                />
-                <Inspector
-                  connection={connection}
-                  expanded={expanded}
-                  onExpand={() => navigate({ expanded: !expanded })}
-                  onClose={() => {
-                    navigate({ connection: null, expanded: false });
-                    requestAnimationFrame(() => search.current?.focus());
-                  }}
-                />
-              </>
-            )}
           </div>
         ) : (
-          <section className="app-layout" aria-label="Applications">
-            <div className="app-list">
-              <div className="section-caption">
-                <button
-                  className="sort-heading"
-                  aria-label="Sort applications alphabetically"
-                  aria-pressed={appSort === "name"}
-                  onClick={() => {
-                    setAppSort("name");
-                    setAppPage(0);
-                  }}
-                >
-                  Applications {appSort === "name" && "↑"}
-                </button>
-                <button
-                  className="sort-heading"
-                  aria-label="Sort applications by download rate"
-                  aria-pressed={appSort === "download"}
-                  onClick={() => {
-                    setAppSort("download");
-                    setAppPage(0);
-                  }}
-                >
-                  Download rate {appSort === "download" && "↓"}
-                </button>
-              </div>
+          <section
+            aria-label="Applications"
+            className="app-layout app-list scroll-region"
+            ref={appList}
+            onScroll={(event) => {
+              if (event.currentTarget.clientHeight > 0)
+                appScrollTop.current = event.currentTarget.scrollTop;
+            }}
+          >
+            <button
+              className="app-row all-traffic-row"
+              aria-pressed={selectedApplication === null}
+              aria-expanded={selectedApplication === null && applicationOpen}
+              onClick={() => {
+                setApplicationOpen(
+                  selectedApplication === null ? !applicationOpen : true,
+                );
+                navigate({
+                  application: null,
+                  connection: null,
+                });
+              }}
+            >
+              <span className="app-icon">
+                <Activity size={20} />
+              </span>
+              <span className="app-name">
+                <strong>All traffic</strong>
+                <small>Current session · traffic and capture coverage</small>
+              </span>
+              <span className="app-disclosure" aria-hidden="true">
+                {selectedApplication === null && applicationOpen ? (
+                  <ChevronDown size={16} />
+                ) : (
+                  <ChevronRight size={16} />
+                )}
+              </span>
+            </button>
+            {selectedApplication === null && applicationDetails}
+            <div className="section-caption">
               <button
-                className="app-row all-traffic-row"
-                aria-pressed={selectedApplication === null}
-                onClick={() =>
-                  navigate({
-                    application: null,
-                    connection: null,
-                    expanded: false,
-                  })
-                }
+                className="sort-heading"
+                aria-label="Sort applications alphabetically"
+                aria-pressed={appSort === "name"}
+                onClick={() => {
+                  setAppSort("name");
+                }}
               >
-                <span className="app-icon">
-                  <Activity size={20} />
-                </span>
-                <span className="app-name">
-                  <strong>All traffic</strong>
-                  <small>Capture coverage and application attribution</small>
-                </span>
+                Applications {appSort === "name" && "↑"}
               </button>
-              {pagedApps.items.map((a) => (
+              <button
+                className="sort-heading"
+                aria-label="Sort applications by download rate"
+                aria-pressed={appSort === "download"}
+                onClick={() => {
+                  setAppSort("download");
+                }}
+              >
+                Download rate {appSort === "download" && "↓"}
+              </button>
+            </div>
+            {apps.map((a) => (
+              <Fragment key={a.key}>
                 <button
                   className="app-row"
-                  key={a.key}
                   aria-pressed={a.key === app?.key}
+                  aria-expanded={a.key === app?.key && applicationOpen}
                   title="Click for traffic overview; double-click to show this application's connections"
                   onDoubleClick={() => {
                     setQuery("");
@@ -1054,14 +1145,15 @@ export default function App() {
                           : a.name,
                       },
                       connection: null,
-                      expanded: false,
                     });
                   }}
                   onClick={() => {
+                    setApplicationOpen(
+                      a.key === selectedApplication ? !applicationOpen : true,
+                    );
                     navigate({
                       application: a.key,
                       connection: null,
-                      expanded: false,
                     });
                   }}
                 >
@@ -1082,63 +1174,19 @@ export default function App() {
                     </small>
                   </span>
                   <span className="app-rate">{bytes(a.rx, true)}</span>
-                  <span className="share-track">
-                    <span style={{ width: `${rx ? (a.rx / rx) * 100 : 0}%` }} />
+                  <span className="app-disclosure" aria-hidden="true">
+                    {a.key === app?.key && applicationOpen ? (
+                      <ChevronDown size={16} />
+                    ) : (
+                      <ChevronRight size={16} />
+                    )}
                   </span>
                 </button>
-              ))}
-              {!apps.length && <Empty active={active} />}
-              {pagedApps.pages > 1 && (
-                <Pagination
-                  page={pagedApps.page}
-                  pages={pagedApps.pages}
-                  onChange={setAppPage}
-                />
-              )}
-            </div>
-            <div className="app-detail">
-              {selectedApplication === null ? (
-                <AllTraffic
-                  snapshot={snapshot}
-                  apps={apps}
-                  history={display.history}
-                />
-              ) : app ? (
-                <ApplicationDetails
-                  key={app.key}
-                  app={app}
-                  points={appPoints}
-                  totalRx={rx}
-                  selected={selectedConnection}
-                  onSelect={(connection) => navigate({ connection }, true)}
-                  onInspect={(id, expand = false) => {
-                    navigate({
-                      screen: "connections",
-                      connection: id,
-                      applicationFilter: null,
-                      expanded: expand,
-                    });
-                    setQuery("");
-                    setProtocol("all");
-                  }}
-                />
-              ) : (
-                <div className="empty">
-                  <Activity size={28} />
-                  <h2>No active connections</h2>
-                  <p>
-                    The selected application is no longer active in this
-                    capture.
-                  </p>
-                  <button
-                    className="button"
-                    onClick={() => navigate({ application: null })}
-                  >
-                    Select an active application
-                  </button>
-                </div>
-              )}
-            </div>
+                {a.key === app?.key && applicationDetails}
+              </Fragment>
+            ))}
+            {selectedApplication !== null && !app && applicationDetails}
+            {!apps.length && <Empty active={active} />}
           </section>
         )}
       </main>

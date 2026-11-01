@@ -1,4 +1,6 @@
-import { useRef, type CSSProperties } from "react";
+import { Fragment, useId, useRef, type CSSProperties } from "react";
+import { ChevronDown, ChevronRight } from "lucide-react";
+import { Inspector } from "./Inspector";
 import {
   bytes,
   connectionLifecycle,
@@ -8,6 +10,20 @@ import {
   type Connection,
   type Sort,
 } from "./model";
+
+/** Reveal a summary row without scrolling the surrounding workspace. */
+export function revealConnectionRow(row: HTMLTableRowElement | undefined) {
+  const scroll = row?.closest<HTMLElement>(".table-scroll");
+  if (!row || !scroll || !scroll.clientHeight) return;
+  const bounds = scroll.getBoundingClientRect();
+  const rect = row.getBoundingClientRect();
+  const heading =
+    scroll.querySelector("thead")?.getBoundingClientRect().height ?? 42;
+  if (rect.top < bounds.top + heading)
+    scroll.scrollTop += rect.top - bounds.top - heading;
+  else if (rect.bottom > bounds.bottom)
+    scroll.scrollTop += rect.bottom - bounds.bottom;
+}
 
 export function ConnectionTable({
   filtered,
@@ -20,20 +36,18 @@ export function ConnectionTable({
   sort: Sort;
   setSort: (sort: Sort) => void;
   selectedConnection: string | null;
-  onSelect: (connection: string, expanded: boolean) => void;
+  onSelect: (connection: string | null) => void;
 }) {
   const lastClickedConnection = useRef<string | null>(null);
+  const inspectorId = useId();
   return (
-    <table
-      onDoubleClick={(event) => {
-        const row = (event.target as Element).closest<HTMLTableRowElement>(
-          "tr[data-connection-id]",
-        );
-        const connection =
-          lastClickedConnection.current || row?.dataset.connectionId;
-        if (connection) onSelect(connection, true);
-      }}
-    >
+    <table className="connection-table" aria-label="Captured connections">
+      <colgroup>
+        <col className="process-column" />
+        <col />
+        <col className="traffic-column" />
+        <col className="traffic-column" />
+      </colgroup>
       <thead>
         <tr>
           <th aria-sort={sort === "process" ? "ascending" : "none"}>
@@ -42,7 +56,7 @@ export function ConnectionTable({
               aria-label="Sort by process"
               onClick={() => setSort("process")}
             >
-              Process {sort === "process" && "↑"}
+              Application {sort === "process" && "↑"}
             </button>
           </th>
           <th aria-sort={sort === "destination" ? "ascending" : "none"}>
@@ -54,8 +68,6 @@ export function ConnectionTable({
               Destination {sort === "destination" && "↑"}
             </button>
           </th>
-          <th>Protocol</th>
-          <th>State</th>
           <th
             className="numeric"
             aria-sort={sort === "download" ? "descending" : "none"}
@@ -65,7 +77,7 @@ export function ConnectionTable({
               aria-label="Sort by download rate"
               onClick={() => setSort("download")}
             >
-              Download rate {sort === "download" && "↓"}
+              Download {sort === "download" && "↓"}
             </button>
           </th>
           <th
@@ -77,7 +89,7 @@ export function ConnectionTable({
               aria-label="Sort by upload rate"
               onClick={() => setSort("upload")}
             >
-              Upload rate {sort === "upload" && "↓"}
+              Upload {sort === "upload" && "↓"}
             </button>
           </th>
         </tr>
@@ -85,71 +97,85 @@ export function ConnectionTable({
       <tbody>
         {filtered.map((c) => {
           const lifecycle = connectionLifecycle(c);
+          const selected = selectedConnection === c.id;
           return (
-            <tr
-              key={c.id}
-              data-connection-id={c.id}
-              style={
-                {
-                  "--lifecycle-fade": lifecycle?.fade ?? 0,
-                } as CSSProperties
-              }
-              onClick={(event) => {
-                if (event.detail < 2) {
-                  lastClickedConnection.current = c.id;
-                  onSelect(c.id, false);
-                } else onSelect(lastClickedConnection.current || c.id, true);
-              }}
-              className={`${selectedConnection === c.id ? "selected" : ""} ${c.historic ? "historic" : ""} ${lifecycle ? "stale-connection" : ""}`}
-            >
-              <td>
-                <button
-                  className="row-select"
-                  aria-pressed={selectedConnection === c.id}
-                  aria-label={`Inspect ${processName(c)} connection to ${destination(c)}`}
-                >
-                  {processName(c)}
-                </button>
-                <small>
-                  {c.process?.pid == null
-                    ? "PID unknown"
-                    : `PID ${c.process.pid}`}
-                </small>
-              </td>
-              <td>
-                <span className="hostname" title={destination(c)}>
-                  {destination(c)}
-                </span>
-                <small>{endpoint(c.remote)}</small>
-              </td>
-              <td>
-                <span className="protocol-badge">
-                  {c.application || c.protocol}
-                </span>
-                <small>{c.protocol}</small>
-              </td>
-              <td>
-                <span className="state-label">
-                  {c.historic ? "Closed" : c.state}
-                </span>
-                {c.historic && <small>Last state: {c.state}</small>}
-                {lifecycle && (
-                  <small className="lifecycle-countdown">
-                    {lifecycle.label}
+            <Fragment key={c.id}>
+              <tr
+                data-connection-id={c.id}
+                style={
+                  { "--lifecycle-fade": lifecycle?.fade ?? 0 } as CSSProperties
+                }
+                onClick={(event) => {
+                  if (event.detail < 2) {
+                    lastClickedConnection.current = c.id;
+                    onSelect(selected ? null : c.id);
+                  }
+                }}
+                onDoubleClick={() =>
+                  onSelect(lastClickedConnection.current || c.id)
+                }
+                className={`${selected ? "selected" : ""} ${c.historic ? "historic" : ""} ${lifecycle ? "stale-connection" : ""}`}
+              >
+                <td>
+                  <button
+                    className="row-select"
+                    aria-pressed={selected}
+                    aria-expanded={selected}
+                    aria-controls={selected ? inspectorId : undefined}
+                    aria-label={`Inspect ${processName(c)} connection to ${destination(c)}`}
+                    title={processName(c)}
+                  >
+                    {selected ? (
+                      <ChevronDown size={14} aria-hidden="true" />
+                    ) : (
+                      <ChevronRight size={14} aria-hidden="true" />
+                    )}
+                    <span>{processName(c)}</span>
+                  </button>
+                  <small>
+                    {c.process?.pid == null
+                      ? "PID unknown"
+                      : `PID ${c.process.pid}`}
                   </small>
-                )}
-              </td>
-              <td className="numeric">
-                {c.historic
-                  ? "Closed"
-                  : bytes(c.traffic.incoming_bytes_per_second, true)}
-              </td>
-              <td className="numeric">
-                {c.historic
-                  ? "Closed"
-                  : bytes(c.traffic.outgoing_bytes_per_second, true)}
-              </td>
-            </tr>
+                </td>
+                <td>
+                  <span className="hostname" title={destination(c)}>
+                    {c.hostname || endpoint(c.remote)}
+                  </span>
+                  <small className="connection-address">
+                    {c.hostname && `${endpoint(c.remote)} · `}
+                    {c.application || c.protocol} ·{" "}
+                    {c.historic ? `Closed · Last state: ${c.state}` : c.state}
+                  </small>
+                  {lifecycle && (
+                    <small className="lifecycle-countdown">
+                      {lifecycle.label}
+                    </small>
+                  )}
+                </td>
+                <td className="numeric connection-download">
+                  {c.historic
+                    ? "Closed"
+                    : bytes(c.traffic.incoming_bytes_per_second, true)}
+                </td>
+                <td className="numeric connection-upload">
+                  {c.historic
+                    ? "Retained"
+                    : bytes(c.traffic.outgoing_bytes_per_second, true)}
+                </td>
+              </tr>
+              {selected && (
+                <tr className="connection-detail-row">
+                  <td colSpan={4}>
+                    <Inspector
+                      id={inspectorId}
+                      connection={c}
+                      onClose={() => onSelect(null)}
+                    />
+                  </td>
+                </tr>
+              )}
+            </Fragment>
           );
         })}
       </tbody>

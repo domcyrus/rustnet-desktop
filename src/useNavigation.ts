@@ -5,7 +5,6 @@ export type Navigation = {
   connection: string | null;
   application: string | null;
   applicationFilter: { key: string; label: string } | null;
-  expanded: boolean;
 };
 
 export function useNavigation(initialScreen: Navigation["screen"]) {
@@ -14,7 +13,6 @@ export function useNavigation(initialScreen: Navigation["screen"]) {
     connection: null,
     application: null,
     applicationFilter: null,
-    expanded: false,
   });
   const current = useRef(navigation);
   const owner = useRef(`rustnet-${Date.now()}-${Math.random()}`);
