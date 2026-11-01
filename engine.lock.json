@@ -14,6 +14,10 @@
     {
       "file": "engine/patches/0003-windows-capture-helper.patch",
       "sha256": "519fa2212a1860c61cb8e5189af1b47ba6cc9ad534fe538c7fc648f57bef9c3f"
+    },
+    {
+      "file": "engine/patches/0004-cache-historic-headless-records.patch",
+      "sha256": "bfb3d3cc635b4bc546fbf28925adc60b62edab9465fc40ce35cb7a69d0041443"
     }
   ]
 }

@@ -70,12 +70,14 @@ async fn capture_view(
     state: State<'_, Desktop>,
     known: Option<engine::CaptureCursor>,
     include_snapshot: Option<bool>,
-) -> Result<Option<engine::CaptureView>, String> {
-    Ok(state
-        .engine
-        .lock()
-        .await
-        .view(known.as_ref(), include_snapshot.unwrap_or(true)))
+) -> Result<engine::CaptureResponse, String> {
+    Ok(engine::CaptureResponse(
+        state
+            .engine
+            .lock()
+            .await
+            .view(known.as_ref(), include_snapshot.unwrap_or(true)),
+    ))
 }
 
 #[tauri::command]
