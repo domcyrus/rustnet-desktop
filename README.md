@@ -22,9 +22,18 @@
   <strong>English</strong> · <a href="README.zh-CN.md">简体中文</a> · <a href="README.ja.md">日本語</a>
 </p>
 
-![RustNet Desktop on macOS showing per-application bandwidth, active connections, and a live traffic chart](docs/screenshots/applications-macos.png)
+![RustNet Desktop's Prism interface in light mode, showing a traffic chart, capture coverage, and per-application bandwidth](docs/screenshots/applications-prism-light.png)
 
-<p align="center"><sub>Alpha preview on macOS, showing real captured traffic.</sub></p>
+<p align="center"><sub>The Prism interface in light mode. Alpha preview with sample traffic.</sub></p>
+
+<details>
+<summary>Connection details in dark mode</summary>
+
+![RustNet Desktop's Prism interface in dark mode, showing a connection's traffic, process, TLS, and transport details inline](docs/screenshots/connections-prism-dark.png)
+
+<p align="center"><sub>Inspect a connection directly beneath its row. Alpha preview with sample traffic.</sub></p>
+
+</details>
 
 ## Explore your traffic
 
@@ -38,7 +47,7 @@ The alpha preview includes:
 | --- | --- |
 | **Which app is using the network?** | Per-application download and upload rates, active connections, and 60-second traffic charts. |
 | **Where is it connecting?** | Searchable connections with process, hostname, IP, port, and protocol details. Optional GeoIP databases add location context. |
-| **What is happening on a connection?** | Inspect DNS, TLS, process metadata, and transport health where the engine can observe them. |
+| **What is happening on a connection?** | Expand inline details to inspect DNS, TLS, process metadata, and transport health where the engine can observe them. |
 | **Can I investigate it later?** | Browse retained connections, freeze the view, or record annotated PCAPNG files during capture. |
 
 The desktop runs as your regular user; capture permissions belong to the engine.

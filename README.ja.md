@@ -22,9 +22,18 @@
   <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <strong>日本語</strong>
 </p>
 
-![macOS の RustNet Desktop でアプリ別の帯域使用量、アクティブ接続、リアルタイムの通信グラフを表示](docs/screenshots/applications-macos.png)
+![RustNet Desktop の Prism ライトテーマで通信グラフ、キャプチャの内訳、アプリ別の帯域使用量を表示](docs/screenshots/applications-prism-light.png)
 
-<p align="center"><sub>macOS の Alpha プレビュー。実際にキャプチャした通信を表示しています。</sub></p>
+<p align="center"><sub>Prism のライトテーマ。サンプル通信を使った Alpha プレビューです。</sub></p>
+
+<details>
+<summary>ダークテーマで接続の詳細を見る</summary>
+
+![RustNet Desktop の Prism ダークテーマで、接続行の直下に通信量、プロセス、TLS、トランスポートの詳細を表示](docs/screenshots/connections-prism-dark.png)
+
+<p align="center"><sub>接続行の直下で詳細を確認できます。サンプル通信を使った Alpha プレビューです。</sub></p>
+
+</details>
 
 ## 通信を調べる
 
@@ -37,7 +46,7 @@ Alpha プレビューでは、次の機能を利用できます。
 | --- | --- |
 | **どのアプリがネットワークを使っている？** | アプリ別のダウンロード・アップロード速度、アクティブ接続、直近 60 秒の通信グラフ。 |
 | **どこに接続している？** | プロセス、ホスト名、IP、ポート、プロトコルで検索できる接続一覧。任意の GeoIP データベースで位置情報も追加できます。 |
-| **接続で何が起きている？** | エンジンが観測できる範囲で、DNS、TLS、プロセスのメタデータ、通信の状態を確認できます。 |
+| **接続で何が起きている？** | 接続行の直下に詳細を開き、エンジンが観測できる範囲で DNS、TLS、プロセスのメタデータ、通信の状態を確認できます。 |
 | **後から調査できる？** | 保持中の接続履歴を表示し、画面を一時停止したり、キャプチャ中に注釈付き PCAPNG を記録したりできます。 |
 
 デスクトップは通常ユーザーで動作し、キャプチャ権限はエンジンが使用します。

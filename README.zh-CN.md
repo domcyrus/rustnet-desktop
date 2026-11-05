@@ -22,9 +22,18 @@
   <a href="README.md">English</a> · <strong>简体中文</strong> · <a href="README.ja.md">日本語</a>
 </p>
 
-![macOS 上的 RustNet Desktop，显示各应用带宽、活跃连接和实时流量图](docs/screenshots/applications-macos.png)
+![RustNet Desktop 的 Prism 浅色界面，显示流量图、抓包覆盖统计和各应用带宽](docs/screenshots/applications-prism-light.png)
 
-<p align="center"><sub>macOS 上的 Alpha 预览版，展示实际捕获的流量。</sub></p>
+<p align="center"><sub>Prism 浅色界面。Alpha 预览版，使用示例流量。</sub></p>
+
+<details>
+<summary>查看深色模式下的连接详情</summary>
+
+![RustNet Desktop 的 Prism 深色界面，在连接行下方展开流量、进程、TLS 和传输详情](docs/screenshots/connections-prism-dark.png)
+
+<p align="center"><sub>直接在连接行下方查看详情。Alpha 预览版，使用示例流量。</sub></p>
+
+</details>
 
 ## 探索网络流量
 
@@ -37,7 +46,7 @@ Alpha 预览版提供：
 | --- | --- |
 | **哪个应用正在使用网络？** | 各应用的下载与上传速率、活跃连接，以及最近 60 秒的流量图。 |
 | **它正在连接哪里？** | 可搜索的连接列表，包含进程、主机名、IP、端口和协议信息。可选的 GeoIP 数据库提供地理位置参考。 |
-| **连接上发生了什么？** | 在引擎能够观测的范围内，查看 DNS、TLS、进程元数据和传输健康信息。 |
+| **连接上发生了什么？** | 在连接行下方展开详情，在引擎能够观测的范围内查看 DNS、TLS、进程元数据和传输健康信息。 |
 | **能否留待后续分析？** | 浏览保留的历史连接、冻结视图，或在抓包期间录制带注释的 PCAPNG 文件。 |
 
 桌面应用以普通用户运行，抓包权限由引擎使用。覆盖统计也会展示无法归属到应用的流量。
