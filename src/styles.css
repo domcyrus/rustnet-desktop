@@ -2162,6 +2162,10 @@ html[data-scrollbars="comfortable"]
   align-items: center;
   gap: 7px;
 }
+/* The selected row already provides a full-width focus indicator. */
+.connection-table tr.selected .row-select:focus-visible {
+  outline: none;
+}
 .row-select > svg {
   flex: none;
   color: var(--muted);

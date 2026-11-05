@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Changed
+- Remove the extra focus rectangle around selected connection names while keeping the row highlight.
 - Apply Prism throughout the desktop, with inline three-column connection details, one shared list/detail scroll area, keyboard scrolling, neutral warnings, and saved scrollbar/row-density preferences. Keep the traffic overview compact, remove duplicate headings, and separate live summary metrics.
 - Validate incoming capture JSON once and forward it through the raw IPC response; optimize JSON parsing in debug desktop builds.
 - Cache unchanged historic connection JSON in the capture engine, including extended metadata, with bounded retention and unchanged snapshot output.
