@@ -27,11 +27,11 @@
 <p align="center"><sub>The Prism interface in light mode. Alpha preview with sample traffic.</sub></p>
 
 <details>
-<summary>Connection details in dark mode</summary>
+<summary>Connection details and GeoIP in dark mode</summary>
 
-![RustNet Desktop's Prism interface in dark mode, showing a connection's traffic, process, TLS, and transport details inline](docs/screenshots/connections-prism-dark.png)
+![RustNet Desktop's Prism interface in dark mode, showing inline connection details with GeoIP country, city, ASN, process, and TLS information](docs/screenshots/connections-prism-dark.png)
 
-<p align="center"><sub>Inspect a connection directly beneath its row. Alpha preview with sample traffic.</sub></p>
+<p align="center"><sub>Inspect traffic, TLS, and GeoIP country, city, and network operator directly beneath a connection. Alpha preview with sample traffic and GeoIP data.</sub></p>
 
 </details>
 
@@ -46,9 +46,14 @@ The alpha preview includes:
 | What you want to know | What you can explore |
 | --- | --- |
 | **Which app is using the network?** | Per-application download and upload rates, active connections, and 60-second traffic charts. |
-| **Where is it connecting?** | Searchable connections with process, hostname, IP, port, and protocol details. Optional GeoIP databases add location context. |
+| **Where is it connecting?** | Searchable connections with process, hostname, IP, port, and protocol details. Optional local GeoIP databases add approximate country/city location and network operator (ASN). |
 | **What is happening on a connection?** | Expand inline details to inspect DNS, TLS, process metadata, and transport health where the engine can observe them. |
 | **Can I investigate it later?** | Browse retained connections, freeze the view, or record annotated PCAPNG files during capture. |
+
+**Add GeoIP context:** In capture settings, select **Choose GeoIP folder** and
+choose your GeoLite2 database folder, then restart capture. On macOS and Linux,
+`~/.local/share/rustnet/geoip/` is discovered automatically. See
+[GeoIP setup](docs/GUIDE.md#geoip-databases) for database filenames and options.
 
 The desktop runs as your regular user; capture permissions belong to the engine.
 Capture coverage makes unattributed traffic visible too. See the
