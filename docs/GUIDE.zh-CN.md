@@ -267,8 +267,9 @@ GLib `VariantStrIter` 的健全性问题（RUSTSEC-2024-0429）。桌面检查�
 
 GitHub Dependabot 每天检查仓库根目录的 pnpm 依赖、`src-tauri` 中的 Cargo 依赖
 和 GitHub Actions。配置沿用 RustNet 的策略：按生态分组，包括主版本升级。包更新
-默认等待 3 天，主版本等待 7 天、次版本 4 天、补丁版本 3 天。安全更新不受等待期
-限制。合并前应审查 PR 和 CI 结果；未配置自动合并，无需安装外部应用。
+默认等待 3 天，主版本等待 7 天、次版本 4 天、补丁版本 3 天。GitHub Actions 更新
+等待 3 天。Dependabot 自动将安全更新排除在等待期之外。合并前应审查 PR 和 CI
+结果；未配置自动合并，无需安装外部应用。
 
 `engine.lock.json` 和临时引擎补丁仍需一起手动维护，Dependabot 不会更新已应用
 补丁的引擎提交版本。
