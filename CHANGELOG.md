@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
-- Resolve Linux application icons for simple shell launchers that locate a sibling executable through a symlink, including ChatGPT. (#38)
+- Resolve Linux application icons for simple shell launchers that locate a sibling executable through a symlink, including ChatGPT. (#39)
 
 ### Changed
 - Remove the extra focus rectangle around selected connection names while keeping the row highlight.
