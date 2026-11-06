@@ -2,6 +2,9 @@
 
 ## [Unreleased]
 
+### Fixed
+- Resolve Linux application icons for simple shell launchers that locate a sibling executable through a symlink, including ChatGPT. (#39)
+
 ### Changed
 - Remove the extra focus rectangle around selected connection names while keeping the row highlight.
 - Apply Prism throughout the desktop, with inline three-column connection details, one shared list/detail scroll area, keyboard scrolling, neutral warnings, and saved scrollbar/row-density preferences. Keep the traffic overview compact, remove duplicate headings, and separate live summary metrics.
