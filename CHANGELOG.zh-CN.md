@@ -3,7 +3,7 @@
 ## [Unreleased]
 
 ### 修复
-- 修复带有 `(deleted)` 标记的已更新可执行文件及最终执行固定绝对路径的 shell 启动器的 Linux 图标匹配，包括 Signal。
+- 修复带有 `(deleted)` 标记的已更新可执行文件及最终执行固定绝对路径的 shell 启动器的 Linux 图标匹配，包括 Signal。 (#40)
 - 修复通过符号链接定位同目录可执行文件的简单 shell 启动器的 Linux 应用图标匹配，包括 ChatGPT。 (#39)
 
 ### 变更
