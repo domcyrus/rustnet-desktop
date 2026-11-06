@@ -85,6 +85,7 @@ and select **Start capture**.
 | **Windows** | Install the MSVC toolchain, WebView2, and Npcap. Launch normally; starting capture requests UAC approval for the engine only. |
 
 For an isolated build on macOS or Linux, follow the [build guide](BUILDING.md).
+For Arch Linux, the [container build](BUILDING.md#arch-linux-container-build) keeps Node.js and Rust off the host.
 Prefer a terminal interface? Try [RustNet](https://github.com/domcyrus/rustnet).
 
 ## Go further

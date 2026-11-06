@@ -2,6 +2,8 @@
 
 [English](BUILDING.md) | [简体中文](BUILDING.zh-CN.md) | [日本語](BUILDING.ja.md)
 
+ホストに Node.js、pnpm、Rust をインストールせずに Arch Linux 向けにビルドする場合は、下記の[コンテナビルド](#arch-linux-コンテナビルド)を使用してください。
+
 macOS または Linux で、依存関係のスクリプト、ビルドツール、テストによるホストへのアクセスを制限します。通常のプラットフォーム依存関係、rustup で導入した Rust、Node.js、`package.json` で固定した pnpm を先にインストールしてください。これらのツールとリポジトリの起動スクリプトは信頼する入力です。Linux では Bubblewrap（Debian/Ubuntu では `sudo apt-get install bubblewrap`）と非特権ユーザー名前空間が必要です。macOS ではシステムの `sandbox-exec` が必要です。この手順は Windows に対応していません。
 
 AppArmor がユーザー名前空間を制限する Ubuntu では、管理者が配布元の `bwrap-userns-restrict` プロファイルも有効にする必要があります（Ubuntu 24.04 では `apparmor-profiles` が提供）。[Ubuntu の名前空間ガイド](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007)を参照してください。起動スクリプトはシステムポリシーの変更や AppArmor の無効化を行わず、名前空間の初期化に失敗するとビルドを停止します。
@@ -30,6 +32,38 @@ node scripts/isolated-build.mjs --build-only
 ```
 
 `--build-only` は前回取得時のソースコピーを使い、その後のチェックアウトの編集は反映しません。依存関係が不足するとオフラインで失敗します。通常の実行はソースをコピーし直し、専用キャッシュだけを再利用します。ビルドや起動したデスクトップが動いていないことを確認して `.isolated-build/` を削除すると、キャッシュを初期化できます。`.isolated-build.lock/` は同時ビルドと sudo セッションを防ぎます。強制終了後のロック削除は、前のセッションが終了したことを確認してから行ってください。
+
+## Arch Linux コンテナビルド
+
+Dockerfile は Arch Linux のパッケージを使い、最適化された x86_64 Linux 実行ファイルを生成します。ビルドホストに必要なのは Docker（現在の既定の BuildKit を使用）または Podman と、Bash および標準 Unix ツールです。ホストへの Node.js、pnpm、Rust、Bubblewrap のインストールは不要です。リポジトリで実行してください。
+
+```sh
+./scripts/build-container.sh
+```
+
+スクリプトはイメージをビルドし、そのビルド結果から停止状態のコンテナを作成して、両方のバイナリを `dist/linux/` にコピーし、一時コンテナを削除します。パスを指定すれば任意のディレクトリから呼び出せます。ビルドや取り出しに失敗した場合、既存のバイナリは保持されます。`dist/linux/rustnet-desktop` と `dist/linux/rustnet-capture-engine` は同じディレクトリに置いてください。最終イメージにはこの 2 ファイルだけが含まれ、取り出し専用であり `docker run` 用ではありません。スクリプトは実行ファイルを起動しません。`docker build --pull --output type=local,dest=dist/container .` で直接出力することもできます。ファイルは `dist/container/out/` に配置されます。
+
+rootless Podman を使う場合は、sudo を付けずに `./scripts/build-container.sh --runtime podman` を実行してください。Docker も [rootless モード](https://docs.docker.com/engine/security/rootless/)に対応しています。既存の rootful Docker も使用できますが、デーモンはホストの root 権限を保持します。この手順はランタイムの設定やホストのポリシーを変更しません。
+
+### コンテナの隔離
+
+Docker/Podman がビルドサンドボックスを提供するため、Bubblewrap の入れ子や特権モードは不要です。システムパッケージと固定バージョンの pnpm はコンテナの root としてインストールします。プロジェクト依存関係の取得、コンパイル、テストは非特権の `builder` ユーザーで実行し、`no_new_privs` を有効にします。`.dockerignore` の許可リストはビルド入力だけを送り、Git メタデータ、ホストのキャッシュ、一般的な認証ファイルを除外します。許可したソースディレクトリを事前に確認してください。ソース内の秘密情報も入力に含まれます。ビルド手順にホストディレクトリ、Docker socket、SSH agent、秘密情報をマウントしません。
+
+取得段階はネットワークを許可し、エンジンのパッチハッシュを検証して固定依存関係を取得します。pnpm のライフサイクルスクリプトと pnpmfile フックは無効です。コンパイルとテストは `RUN --network=none` を使い、pnpm と Cargo もオフラインで動作します。出力前に、ローカルの隔離ビルドと同じフロントエンドテスト、エンジンソーステスト、Rust テスト、書式確認、Clippy を通過する必要があります。失敗時は停止します。回避のために `--privileged`、ホストネットワーク、安全でないビルド権限を追加しないでください。
+
+コンテナはホストのカーネルを共有し、隔離は生成物の信頼性を保証しません。Rootless Docker または Podman はランタイムの権限を減らします。より強い境界には使い捨て VM を使ってください。ベースイメージと Arch パッケージは継続的に更新されるため、ビット単位の再現性は保証しません。スクリプトは常に `--pull` でベースイメージを更新します。`./scripts/build-container.sh --no-cache` はパッケージのインストールと全ビルド手順も再実行します。pnpm 依存関係、Rust 依存関係、エンジンのリビジョンは引き続きリポジトリで固定されます。
+
+### Arch Linux で実行
+
+ホストと同じアーキテクチャ向けにビルドしてください。この手順は現在の Arch Linux x86_64 向けで、古いディストリビューションや ARM 向けではありません。ビルド環境のランタイムライブラリに合わせてホストを更新してください。
+
+```sh
+sudo pacman -Syu --needed webkit2gtk-4.1 gtk3 libayatana-appindicator librsvg libpcap libelf
+sudo setcap cap_net_raw+eip dist/linux/rustnet-capture-engine
+./dist/linux/rustnet-desktop
+```
+
+上記の capability は eBPF を使わないキャプチャを許可します。信頼するビルドを取り出した後にのみ設定し、エンジンを置き換えたら再設定してください。UI は通常ユーザーで実行します。Node.js と pnpm は実行時に不要で、フロントエンドは内蔵されています。ビルド用サンドボックスは起動後のデスクトップを隔離しません。エンジンの追加要件は[キャプチャ権限](docs/GUIDE.ja.md#キャプチャ権限)を参照してください。ウィンドウが空白の場合は `WEBKIT_DISABLE_DMABUF_RENDERER=1 ./dist/linux/rustnet-desktop` を試してください。
 
 ## ビルド後の sudo キャプチャ
 

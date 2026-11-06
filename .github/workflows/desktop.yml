@@ -39,6 +39,11 @@ jobs:
           sudo apparmor_parser -r /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
       # These tests need no npm dependencies and exercise the actual OS boundary.
       - run: node --test scripts/isolation.check.mjs
+      - name: Check container build launcher
+        if: runner.os == 'Linux'
+        run: |
+          bash -n scripts/build-container.sh
+          node --test scripts/container-build.check.mjs
 
   desktop:
     runs-on: ubuntu-latest
