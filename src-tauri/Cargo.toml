@@ -9,11 +9,17 @@ repository = "https://github.com/domcyrus/rustnet-desktop"
 
 # Keep GUI system dependencies out of the CLI workspace and lockfile.
 [workspace]
+members = ["analytics"]
+default-members = [".", "analytics"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+[dev-dependencies]
+tempfile = "3"
+
 [dependencies]
+rustnet-analytics = { path = "analytics" }
 tauri = { version = "~2.11", features = [] }
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive", "rc"] }

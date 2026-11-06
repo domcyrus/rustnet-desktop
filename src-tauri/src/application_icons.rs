@@ -53,3 +53,101 @@ pub fn lookup(executable: Option<&str>, name: &str, pids: &[u32]) -> Option<Stri
         None
     }
 }
+
+static ICON_CACHE_ACCESS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+// Cache failures only remove the persistence benefit, never the native icon or capture.
+pub fn persisted(
+    path: Option<std::path::PathBuf>,
+    executable: Option<String>,
+    icon: Option<String>,
+) -> Option<String> {
+    let saved = (|| -> Result<Option<String>, Box<dyn std::error::Error + Send + Sync>> {
+        let (Some(path), Some(executable)) = (path, executable) else {
+            return Ok(None);
+        };
+        if !std::path::Path::new(&executable).is_absolute() {
+            return Ok(None);
+        }
+        // Lists request many icons concurrently; serialize the short cache transactions
+        // on the blocking pool to avoid losing writes during SQLite lock upgrades.
+        let _access = ICON_CACHE_ACCESS.lock().unwrap_or_else(|e| e.into_inner());
+        if icon.is_none() && !path.try_exists()? {
+            return Ok(None);
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_millis() as i64;
+        let mut cache = rustnet_analytics::icons::IconCache::open(&path)?;
+        if let Some(png) = &icon {
+            cache.put(&executable, png, now)?;
+            Ok(None)
+        } else {
+            cache.get(&executable, now)
+        }
+    })()
+    .ok()
+    .flatten();
+    icon.or(saved)
+}
+
+#[cfg(test)]
+mod persistence_tests {
+    use super::persisted;
+    #[test]
+    fn concurrent_first_lookups_preserve_every_executable_reference() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("icons.db");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(16));
+        let png = "data:image/png;base64,iVBORw0KGgo=";
+        let mut tasks = Vec::new();
+        for i in 0..16 {
+            let db = db.clone();
+            let barrier = barrier.clone();
+            let key = dir
+                .path()
+                .join(format!("app-{i}"))
+                .to_string_lossy()
+                .into_owned();
+            tasks.push(std::thread::spawn(move || {
+                barrier.wait();
+                persisted(Some(db), Some(key.clone()), Some(png.into()));
+                key
+            }));
+        }
+        for task in tasks {
+            assert_eq!(
+                persisted(Some(db.clone()), Some(task.join().unwrap()), None).as_deref(),
+                Some(png)
+            );
+        }
+    }
+    #[test]
+    fn cache_failure_preserves_native_icon_and_missing_apps_use_saved_icons() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = "data:image/png;base64,iVBORw0KGgo=".to_string();
+        let executable = Some(
+            dir.path()
+                .join("removed-app")
+                .to_string_lossy()
+                .into_owned(),
+        );
+        assert_eq!(
+            persisted(
+                Some(dir.path().into()),
+                executable.clone(),
+                Some(png.clone())
+            ),
+            Some(png.clone())
+        );
+        let db = Some(dir.path().join("icons.sqlite3"));
+        assert_eq!(
+            persisted(db.clone(), executable.clone(), Some(png.clone())),
+            Some(png.clone())
+        );
+        assert_eq!(persisted(db, executable, None), Some(png));
+    }
+}

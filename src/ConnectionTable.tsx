@@ -1,5 +1,6 @@
 import { Fragment, useId, useRef, type CSSProperties } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
+import { ApplicationIcon } from "./ApplicationIcon";
 import { Inspector } from "./Inspector";
 import {
   bytes,
@@ -117,26 +118,38 @@ export function ConnectionTable({
                 className={`${selected ? "selected" : ""} ${c.historic ? "historic" : ""} ${lifecycle ? "stale-connection" : ""}`}
               >
                 <td>
-                  <button
-                    className="row-select"
-                    aria-pressed={selected}
-                    aria-expanded={selected}
-                    aria-controls={selected ? inspectorId : undefined}
-                    aria-label={`Inspect ${processName(c)} connection to ${destination(c)}`}
-                    title={processName(c)}
-                  >
-                    {selected ? (
-                      <ChevronDown size={14} aria-hidden="true" />
-                    ) : (
-                      <ChevronRight size={14} aria-hidden="true" />
-                    )}
-                    <span>{processName(c)}</span>
-                  </button>
-                  <small>
-                    {c.process?.pid == null
-                      ? "PID unknown"
-                      : `PID ${c.process.pid}`}
-                  </small>
+                  <div className="connection-identity">
+                    <ApplicationIcon
+                      app={{
+                        name: processName(c),
+                        executable: c.process?.executable ?? null,
+                        pids: c.process?.pid == null ? [] : [c.process.pid],
+                      }}
+                      historical={c.historic}
+                    />
+                    <div className="connection-identity-text">
+                      <button
+                        className="row-select"
+                        aria-pressed={selected}
+                        aria-expanded={selected}
+                        aria-controls={selected ? inspectorId : undefined}
+                        aria-label={`Inspect ${processName(c)} connection to ${destination(c)}`}
+                        title={processName(c)}
+                      >
+                        {selected ? (
+                          <ChevronDown size={14} aria-hidden="true" />
+                        ) : (
+                          <ChevronRight size={14} aria-hidden="true" />
+                        )}
+                        <span>{processName(c)}</span>
+                      </button>
+                      <small>
+                        {c.process?.pid == null
+                          ? "PID unknown"
+                          : `PID ${c.process.pid}`}
+                      </small>
+                    </div>
+                  </div>
                 </td>
                 <td>
                   <span className="hostname" title={destination(c)}>

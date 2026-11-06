@@ -246,6 +246,190 @@ further workarounds. Black areas alone do not establish the exact cause.
 - **Help** in the sidebar or `h` explains the current view and its shortcuts.
   Capture settings and the inspector also have their own help.
 
+## Local traffic history (development)
+
+Enable **Save traffic history** in Capture settings before starting capture.
+The option defaults to off, remembers your choice across app restarts, and is
+independent of PCAPNG recording. Changes apply
+on the next capture. The desktop shows the database path and any storage error
+or skipped snapshots. History continues while the view is hidden or frozen,
+but stops when capture stops or the app exits.
+
+Open **Saved history** in the sidebar to browse saved traffic after a restart,
+filter by time (including custom local dates), application and capture interface,
+and inspect uploaded/downloaded totals, destinations and the latest matching
+capture sessions. **Inspect traffic** on a finding selects its application,
+interface and time range. The sampled timeline refreshes every 30 seconds while visible; **Auto-refresh** pauses it;
+the live view's Freeze control does not freeze saved-history queries.
+Refresh keeps the current graphs, zoom, selection and legend choices visible until
+replacement data arrives. Failures leave the last successful view available.
+Automatic refresh waits for both history queries to finish before its next 30-second
+interval, so slow queries do not accumulate.
+After an initial read, timeline refresh uses a database change cursor to read new
+or corrected ten-second samples, including one predecessor counter per connection.
+The last ten-second bucket is revisited so partial intervals can finish. Totals,
+application/connection rows and display bins are rebuilt from the cached window;
+expired samples are removed as the window moves. Anomaly profiles advance from new
+eligible intervals; corrections replay the cached baseline rather than rereading
+all its samples. The desktop still sends a complete, bounded display report to the UI.
+
+Changing filters, expanding backwards, a stale cursor, metadata corrections,
+retention deletion or database replacement causes a full read. The cache holds one
+view, up to 500,000 samples and 500,000 coverage rows, plus the newest 100,001 eligible
+app intervals. Larger windows use full reads; narrowing the duration or changing
+scope retries caching. The dirty-bucket journal retains the latest 100,000 revisions.
+Version 1/2 databases remain readable without changes; incremental reads start after
+capture upgrades the database to version 3. Minute summaries, session details and
+filter options load initially and on **Refresh history** or filter changes, not on
+every automatic timeline refresh.
+
+The Connections **History** toggle still controls retained closed connections.
+
+Saved application and connection rows, and the live Connections list, use the same
+shared native icons. Connection icons sit beside the application name and PID;
+retained closed connections never use their old PIDs for lookup. Icons are
+cached when displayed in either view, in `application-icons.sqlite3` beside the
+traffic database. Each distinct PNG is stored once under its SHA-256 digest;
+executable paths reference that entry. Connections and ten-second samples do not
+store image copies. Cached icons survive restarts and removal of the executable,
+until evicted. The cache retains at most 256 PNGs (128 KiB each) and 2,048 executable
+references; unused images and the oldest entries are removed. Live lookups can
+refresh changed icons. Historical lookups never use saved PIDs, and icons without
+a stable executable path are not persisted. Unavailable icons keep the placeholder.
+
+The history dashboard uses per-connection samples, normally ten seconds apart.
+Traffic rate, observed connections and capture health panels share a cursor and
+time range. Hover to inspect values, drag to select a range, and use **Zoom out**
+to return. With a graph focused, arrow keys inspect intervals, Enter zooms and
+Escape clears the cursor. Legends toggle series and show last recorded and maximum
+values. Anomaly markers open their evidence. Select a connection to inspect its
+cumulative counters and differences.
+Long ranges use larger display bins; zooming reveals the ten-second resolution.
+Traffic rates divide recorded bytes by the full display interval. They are interval
+averages, not instantaneous speeds. Missing values remain gaps. Capture health uses
+gray for no coverage, stripes for partial coverage and dots for counter resets. The connection list has 50 rows per page; sample details have 200.
+Sample totals assign each difference to its ending timestamp, without interpolating
+traffic. A boundary difference can include time before the selected range.
+
+Metadata is stored once in `flow_records` and enriched when process or hostname
+information arrives. `flow_samples` holds timestamps, cumulative counters and a
+continuity segment. The sampler consumes every delivered snapshot, records first
+and final observations, and flushes pending counters on disappearance or capture
+stop. Short connections are included if they appear in an engine snapshot; retained
+closed connections are not repeatedly sampled. Gaps, reappearance and counter
+resets start a new segment, so SQL must not subtract across segments. Missing
+packet counters remain NULL. `capture_intervals` records coverage in ten-second
+buckets independently of connection activity.
+
+Schema version 3 migrates automatically when history collection starts. Existing
+minute summaries remain browsable under **Minute summaries and earlier history**;
+no connection samples are invented for old data. Timeline anomaly detection uses
+connection samples; legacy minute summaries do not train its baseline. Connection metadata displays
+its latest known identity; the older summaries retain attribution at ingestion.
+Samples, coverage and inactive connection metadata expire after 30 days. Storage
+scales with the number of active connections (8,640 periodic samples per continuously
+observed connection per day), plus first/final/boundary records.
+
+History opens with **Applications**, using the same compact rows as the live view.
+Select an application to browse its **Connections** and select a connection for
+counter details. The application list shows up to 200 busiest applications;
+use the application filter to find others. Traffic, observed-connection and
+capture-quality graphs share the selected range. Connection counts are distinct
+sampled connections per display bin, not simultaneous concurrency. The quality
+graph shows gaps, partial coverage and counter resets, not application errors.
+
+**Unusual activity** uses the ten-second connection samples. Circled timeline
+markers open the evidence; **Inspect traffic** narrows the view to the app,
+interface and exact ten-second interval. On a single connection's timeline,
+findings still describe its application's behavior across all its connections.
+The detector requires an executable identity and 180 earlier complete ten-second
+app/interface intervals (30 active minutes) within seven days, using up to 720
+intervals. It excludes unknown deltas, origins without traffic, resets, intervals
+over 15 seconds, incomplete capture coverage, overlapping sessions and capture
+errors. Missing observations are never filled with zeroes. Earlier samples outside
+the displayed range can train the baseline, but future samples cannot.
+
+Upload thresholds are the maximum of 2 MiB per ten seconds, five times the earlier
+median, and median + six median absolute deviations + 256 KiB. Download thresholds
+use 10 MiB and a 1 MiB margin; connection thresholds use 20 and a margin of 4.
+Quantitative outliers do not train the baseline. Newly observed destinations are
+informational first-seen changes after learning; hostname enrichment or service
+changes can explain them. Each finding refers to one ten-second interval, with
+larger display bins showing the combined count of findings.
+
+Findings are recalculated when browsing, not permanently archived or sent as
+background notifications. Analysis uses the newest 100,000 eligible app intervals
+within the selected range and its preceding seven-day training window. The newest
+100 findings are shown and marked; truncation is indicated. Narrow the range or
+application filter to inspect older findings. Connection pages contain 50 rows,
+sample pages contain 200, and the legacy session list shows the latest 20 matches.
+
+The separate `rustnet-analytics` Rust crate consumes existing engine metadata in
+the unprivileged desktop backend. A blocking writer uses SQLite transactions and
+a queue of at most two pending snapshots. A slow or failed writer does not block
+the capture pipe: skipped snapshots are counted, and errors stop history only.
+Stop capture to drain queued writes before inspecting a complete session.
+
+The database is `traffic-history.sqlite3` in Tauri's local app data directory
+(`~/Library/Application Support/io.github.domcyrus.rustnet.desktop/` on macOS).
+Use the exact path displayed in the app on other platforms. It contains app
+names/executable paths, destination hostnames or IPs, ports, protocols, byte
+increments, connection counts and observation coverage. Packet payloads and full
+snapshots are not stored. To remove history, stop capture, quit the app, and
+remove this file and its `-wal` and `-shm` companions if present.
+
+Tables are ordinary SQL: `sessions`, `applications`, `traffic_buckets`,
+`destinations`, and `observation_buckets`. Schema migrations use `user_version`;
+newer unknown versions are rejected. SQLite is bundled through `rusqlite` so
+users do not need a separate database installation. Minute summaries and inactive
+destinations expire after 30 days, checked when history opens and hourly during
+ingestion. Active destinations retain their original first-seen time and count.
+Expired space can be reused; deletion does not necessarily shrink the file.
+
+Accounting limits for legacy minute summaries:
+
+- The first snapshot establishes counters. Initial bytes and increments across
+  missing snapshots, intervals over five seconds, or counter resets are omitted
+  rather than assigned to a misleading burst. Final increments from retained
+  closed connections are included. Flows absent from every snapshot remain unseen.
+- Bytes belong to the minute when the increment was observed, without estimating
+  their timing inside the interval. Coverage duration is split at minute boundaries.
+- Missing minutes are unknown, not zero. `observation_buckets.incomplete` flags
+  gaps, resets, packet loss and degraded attribution. Check `observed_ms`, session
+  errors, `capture_error`, `dropped_snapshots`, and `ended_ms` before using data as
+  a baseline. A clean capture should end with `runtime_status = 'stopped'`.
+- App keys prefer executable paths, then names, with a separate unattributed group.
+  Name-only identities are weaker. Later attribution applies to future increments;
+  previous bytes are not reassigned. Hostnames are normalized for case and a trailing
+  dot, with IP fallback. Later hostname discovery may create a second destination.
+- Destination `connections` counts distinct observed flow/destination associations
+  per session, including flows already present at startup. Traffic bucket counts
+  include only newly observed flows created during a continuous interval.
+
+For example, open the displayed path using `sqlite3 -readonly /path/to/traffic-history.sqlite3`
+and run these queries:
+
+```sql
+SELECT f.id, f.remote_ip, f.remote_port, p.timestamp_ms, p.segment,
+       p.bytes_sent, p.bytes_received, p.packets_sent, p.packets_received
+FROM flow_samples AS p JOIN flow_records AS f ON f.id = p.flow_id
+WHERE f.id = 1 ORDER BY p.timestamp_ms;
+
+SELECT a.name, a.executable,
+       SUM(t.bytes_sent) AS uploaded, SUM(t.bytes_received) AS downloaded
+FROM traffic_buckets AS t JOIN applications AS a ON a.key = t.app_key
+GROUP BY a.key ORDER BY uploaded DESC;
+
+SELECT a.name, d.kind, d.value, d.connections,
+       datetime(d.first_seen_ms / 1000, 'unixepoch') AS first_seen_utc,
+       datetime(d.last_seen_ms / 1000, 'unixepoch') AS last_seen_utc
+FROM destinations AS d JOIN applications AS a ON a.key = d.app_key
+ORDER BY d.first_seen_ms DESC LIMIT 50;
+```
+
+Test the collector without building Tauri:
+`cargo test --locked --manifest-path src-tauri/Cargo.toml -p rustnet-analytics`.
+
 ## Process boundary
 
 The desktop launches only its bundled `rustnet-capture-engine` executable using structured
