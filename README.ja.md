@@ -22,9 +22,18 @@
   <a href="README.md">English</a> · <a href="README.zh-CN.md">简体中文</a> · <strong>日本語</strong>
 </p>
 
-![macOS の RustNet Desktop でアプリ別の帯域使用量、アクティブ接続、リアルタイムの通信グラフを表示](docs/screenshots/applications-macos.png)
+![RustNet Desktop の Prism ライトテーマで通信グラフ、キャプチャの内訳、アプリ別の帯域使用量を表示](docs/screenshots/applications-prism-light.png)
 
-<p align="center"><sub>macOS の Alpha プレビュー。実際にキャプチャした通信を表示しています。</sub></p>
+<p align="center"><sub>Prism のライトテーマ。サンプル通信を使った Alpha プレビューです。</sub></p>
+
+<details>
+<summary>ダークテーマで接続の詳細と GeoIP 情報を見る</summary>
+
+![RustNet Desktop の Prism ダークテーマで、接続行の直下に GeoIP の国、都市、ASN、プロセス、TLS 情報を表示](docs/screenshots/connections-prism-dark.png)
+
+<p align="center"><sub>接続行の直下で通信量、TLS、GeoIP の国、都市、ネットワーク事業者を確認できます。サンプル通信と GeoIP データを使った Alpha プレビューです。</sub></p>
+
+</details>
 
 ## 通信を調べる
 
@@ -36,9 +45,14 @@ Alpha プレビューでは、次の機能を利用できます。
 | 知りたいこと | 確認できる情報 |
 | --- | --- |
 | **どのアプリがネットワークを使っている？** | アプリ別のダウンロード・アップロード速度、アクティブ接続、直近 60 秒の通信グラフ。 |
-| **どこに接続している？** | プロセス、ホスト名、IP、ポート、プロトコルで検索できる接続一覧。任意の GeoIP データベースで位置情報も追加できます。 |
-| **接続で何が起きている？** | エンジンが観測できる範囲で、DNS、TLS、プロセスのメタデータ、通信の状態を確認できます。 |
+| **どこに接続している？** | プロセス、ホスト名、IP、ポート、プロトコルで検索できる接続一覧。任意のローカル GeoIP データベースで、おおよその国・都市の位置情報とネットワーク事業者（ASN）を追加できます。 |
+| **接続で何が起きている？** | 接続行の直下に詳細を開き、エンジンが観測できる範囲で DNS、TLS、プロセスのメタデータ、通信の状態を確認できます。 |
 | **後から調査できる？** | 保持中の接続履歴を表示し、画面を一時停止したり、キャプチャ中に注釈付き PCAPNG を記録したりできます。 |
+
+**GeoIP 情報を追加：** キャプチャ設定の **Choose GeoIP folder** で GeoLite2
+データベースのフォルダーを選び、キャプチャを再開してください。macOS と Linux では
+`~/.local/share/rustnet/geoip/` のデータベースを自動検出します。ファイル名とその他の
+設定は [GeoIP の設定](docs/GUIDE.ja.md#geoip-データベース)を参照してください。
 
 デスクトップは通常ユーザーで動作し、キャプチャ権限はエンジンが使用します。
 キャプチャの内訳には、アプリを特定できない通信も表示します。プラットフォームごとの制限、
