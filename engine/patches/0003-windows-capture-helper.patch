@@ -1,5 +1,5 @@
 diff --git a/Cargo.toml b/Cargo.toml
-index f7796c5..759df64 100644
+index f30d985..f628615 100644
 --- a/Cargo.toml
 +++ b/Cargo.toml
 @@ -110,6 +110,7 @@ windows = { workspace = true, features = [
@@ -85,7 +85,7 @@ index 5936c7b..cf10514 100644
              }
  
 diff --git a/src/app/state.rs b/src/app/state.rs
-index 191f792..7d0e8a0 100644
+index e2446e6..863712d 100644
 --- a/src/app/state.rs
 +++ b/src/app/state.rs
 @@ -240,6 +240,11 @@ fn build_geoip_resolver(config: &Config) -> Option<Arc<GeoIpResolver>> {
@@ -180,11 +180,11 @@ index fdc38f8..bf3c2e1 100644
  
  /// Route termination signals through the regular shutdown path so output is
 diff --git a/src/lib.rs b/src/lib.rs
-index 95bec82..f3e779c 100644
+index f298250..d69b19c 100644
 --- a/src/lib.rs
 +++ b/src/lib.rs
-@@ -30,6 +30,8 @@ pub mod network;
- mod scratch_dir;
+@@ -28,6 +28,8 @@ pub mod network;
+ mod test_support;
  mod tui;
  pub mod ui;
 +#[cfg(windows)]

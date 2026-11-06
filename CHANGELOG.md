@@ -7,6 +7,7 @@
 - Resolve Linux application icons for simple shell launchers that locate a sibling executable through a symlink, including ChatGPT. (#39)
 
 ### Changed
+- Update the bundled engine to RustNet main at `327a63f` after [#699](https://github.com/domcyrus/rustnet/pull/699), refresh desktop integration patches, and reuse upstream historic JSON caching. (#41)
 - Remove the extra focus rectangle around selected connection names while keeping the row highlight.
 - Show shared application icons in saved and live connection rows, without using retained PIDs for icon lookup.
 - Show native icons in saved applications and retain deduplicated PNGs with bounded executable references across restarts.
