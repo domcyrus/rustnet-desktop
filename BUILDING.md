@@ -183,4 +183,6 @@ Sandboxing limits what a compromised build can do to the host; it does not prove
 
 The macOS custom-profile interface is deprecated. A missing or incompatible sandbox is an error, not permission to run unconfined. For a stronger boundary against OS vulnerabilities or genuinely untrusted source, use a disposable VM. The normal `pnpm run desktop` hot-reload workflow remains outside this isolation.
 
-Run `node --test scripts/isolation.check.mjs` to verify real filesystem/network restrictions, subprocess inheritance, and build-before-authentication sequencing. CI runs these checks on both macOS and Linux. They must run outside any outer sandbox that prohibits creating the required OS sandbox.
+Run `node --test scripts/isolation.check.mjs` to verify real filesystem/network restrictions, subprocess inheritance, and build-before-authentication sequencing. They must run outside any outer sandbox that prohibits creating the required OS sandbox.
+
+PRs and pushes to `main` run Linux x64 builds, tests, audits, and isolation checks only. Stable GitHub releases and manual runs of the **Desktop** workflow also run macOS isolation checks, macOS helper tests and bundling, and Windows checks. Pre-releases do not trigger this workflow. Use a manual run to check all platforms before publishing a stable release.

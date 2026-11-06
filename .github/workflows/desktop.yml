@@ -4,23 +4,22 @@ on:
   push:
     branches: [main]
   pull_request:
+  release:
+    types: [released]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# Superseded PRs can stop; pushes and manual runs remain independent.
+# Superseded PRs can stop; pushes, releases and manual runs remain independent.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   isolation:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+    name: isolation (ubuntu-latest)
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -31,7 +30,6 @@ jobs:
         with:
           node-version: '24'
       - name: Install Bubblewrap
-        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y bubblewrap apparmor-profiles
@@ -40,10 +38,25 @@ jobs:
       # These tests need no npm dependencies and exercise the actual OS boundary.
       - run: node --test scripts/isolation.check.mjs
       - name: Check container build launcher
-        if: runner.os == 'Linux'
         run: |
           bash -n scripts/build-container.sh
           node --test scripts/container-build.check.mjs
+
+  isolation-macos:
+    # Keep the required check visible as skipped on PRs instead of removing it.
+    name: isolation (macos-latest)
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+        with:
+          package_json_file: package.json
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
+        with:
+          node-version: '24'
+      - run: node --test scripts/isolation.check.mjs
 
   desktop:
     runs-on: ubuntu-latest
@@ -95,6 +108,7 @@ jobs:
       - run: cargo audit --file src-tauri/Cargo.lock
 
   windows-icons:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     timeout-minutes: 30
     env:
@@ -115,6 +129,7 @@ jobs:
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
 
   macos-helper:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     timeout-minutes: 45
     steps:
