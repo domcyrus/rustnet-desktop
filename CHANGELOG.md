@@ -7,7 +7,7 @@
 - Resolve Linux application icons for simple shell launchers that locate a sibling executable through a symlink, including ChatGPT. (#39)
 
 ### Changed
-- Update the bundled engine to RustNet main at `327a63f` after [#699](https://github.com/domcyrus/rustnet/pull/699), refresh desktop integration patches, and reuse upstream historic JSON caching.
+- Update the bundled engine to RustNet main at `327a63f` after [#699](https://github.com/domcyrus/rustnet/pull/699), refresh desktop integration patches, and reuse upstream historic JSON caching. (#41)
 - Remove the extra focus rectangle around selected connection names while keeping the row highlight.
 - Apply Prism throughout the desktop, with inline three-column connection details, one shared list/detail scroll area, keyboard scrolling, neutral warnings, and saved scrollbar/row-density preferences. Keep the traffic overview compact, remove duplicate headings, and separate live summary metrics.
 - Validate incoming capture JSON once and forward it through the raw IPC response; optimize JSON parsing in debug desktop builds.
