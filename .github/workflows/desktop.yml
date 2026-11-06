@@ -4,12 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  release:
+    types: [released]
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# Superseded PRs can stop; pushes and manual runs remain independent.
+# Superseded PRs can stop; pushes, releases and manual runs remain independent.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -19,7 +21,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # Routine CI uses Linux x64; stable releases and manual runs check macOS too.
+        os: ${{ fromJSON((github.event_name == 'release' || github.event_name == 'workflow_dispatch') && '["ubuntu-latest", "macos-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 10
     steps:
@@ -95,6 +98,7 @@ jobs:
       - run: cargo audit --file src-tauri/Cargo.lock
 
   windows-icons:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: windows-latest
     timeout-minutes: 30
     env:
@@ -115,6 +119,7 @@ jobs:
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml
 
   macos-helper:
+    if: github.event_name == 'release' || github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     timeout-minutes: 45
     steps:

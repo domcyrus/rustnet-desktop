@@ -7,6 +7,7 @@
 - Resolve Linux application icons for simple shell launchers that locate a sibling executable through a symlink, including ChatGPT. (#39)
 
 ### Changed
+- Limit PR and main CI to Linux x64; run macOS and Windows checks on stable releases or manually.
 - Remove the extra focus rectangle around selected connection names while keeping the row highlight.
 - Apply Prism throughout the desktop, with inline three-column connection details, one shared list/detail scroll area, keyboard scrolling, neutral warnings, and saved scrollbar/row-density preferences. Keep the traffic overview compact, remove duplicate headings, and separate live summary metrics.
 - Validate incoming capture JSON once and forward it through the raw IPC response; optimize JSON parsing in debug desktop builds.
