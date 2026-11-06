@@ -1,4 +1,5 @@
 use gtk::{gio, glib, prelude::*};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 pub fn find_icon(executable: Option<&str>, name: &str, pids: &[u32]) -> Option<String> {
@@ -81,7 +82,14 @@ fn match_rank(executable: Option<&Path>, name: &str, program: &Path) -> u8 {
             return 3;
         }
         if let (Ok(left), Ok(right)) = (executable.canonicalize(), resolved.canonicalize()) {
-            return if left == right { 3 } else { 0 };
+            if left == right {
+                return 3;
+            }
+            return if sibling_launcher_target(&right).as_deref() == Some(left.as_path()) {
+                2
+            } else {
+                0
+            };
         }
         return 0;
     }
@@ -91,6 +99,49 @@ fn match_rank(executable: Option<&Path>, name: &str, program: &Path) -> u8 {
     } else {
         0
     }
+}
+
+fn sibling_launcher_target(launcher: &Path) -> Option<PathBuf> {
+    // Recognize a single literal trampoline, never evaluate shell commands.
+    // The caller canonicalizes the launcher, matching readlink -f "$0" below.
+    const LIMIT: u64 = 4096;
+    let metadata = std::fs::metadata(launcher).ok()?;
+    if !metadata.is_file() || metadata.len() > LIMIT {
+        return None;
+    }
+    let mut source = String::new();
+    std::fs::File::open(launcher)
+        .ok()?
+        .take(LIMIT + 1)
+        .read_to_string(&mut source)
+        .ok()?;
+    if source.len() as u64 > LIMIT {
+        return None;
+    }
+    let mut lines = source.lines();
+    if !matches!(
+        lines.next()?,
+        "#!/bin/sh" | "#!/bin/bash" | "#!/usr/bin/sh" | "#!/usr/bin/bash"
+    ) {
+        return None;
+    }
+    let mut commands = lines
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'));
+    let target = commands
+        .next()?
+        .strip_prefix(r#"exec "$(dirname "$(readlink -f "$0")")/"#)?
+        .strip_suffix(r#"" "$@""#)?;
+    if commands.next().is_some()
+        || target.is_empty()
+        || matches!(target, "." | "..")
+        || !target
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._+-".contains(&byte))
+    {
+        return None;
+    }
+    launcher.parent()?.join(target).canonicalize().ok()
 }
 
 pub fn render_icon(serialized: &str) -> Option<String> {
@@ -113,6 +164,7 @@ fn render_with_theme(theme: &gtk::IconTheme, serialized: &str) -> Option<String>
 mod tests {
     use super::*;
     use std::fs;
+    use std::os::unix::fs::PermissionsExt;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     struct Fixture(PathBuf);
@@ -137,6 +189,25 @@ mod tests {
             )
             .unwrap();
             gio::DesktopAppInfo::from_filename(path).unwrap().upcast()
+        }
+
+        fn executable(&self, name: &str, source: &str) -> PathBuf {
+            let path = self.0.join(name);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, source).unwrap();
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        }
+
+        fn launcher(&self) -> (PathBuf, PathBuf) {
+            let executable = self.executable("app/ChatGPT", "#!/bin/sh\nexit 1\n");
+            let launcher = self.executable(
+                "app/launcher",
+                "#!/bin/sh\nexec \"$(dirname \"$(readlink -f \"$0\")\")/ChatGPT\" \"$@\"\n",
+            );
+            let link = self.0.join("chatgpt");
+            std::os::unix::fs::symlink(launcher, &link).unwrap();
+            (executable, link)
         }
     }
 
@@ -199,6 +270,86 @@ mod tests {
     }
 
     #[test]
+    fn matches_sibling_launchers_without_confusing_installations() {
+        let fixture = Fixture::new();
+        let (executable, launcher) = fixture.launcher();
+        let app = fixture.app("chatgpt", launcher.to_str().unwrap(), "chatgpt");
+        assert_eq!(match_rank(Some(&executable), "ChatGPT", &launcher), 2);
+        assert_eq!(
+            select_icon(&[app], Some(&executable), "ChatGPT"),
+            Some("chatgpt".into())
+        );
+        let other = fixture.executable("other/ChatGPT", "");
+        assert_eq!(match_rank(Some(&other), "ChatGPT", &launcher), 0);
+        // Sharing a directory or a similar name is insufficient.
+        let helper = fixture.executable("app/ChatGPT-helper", "");
+        assert_eq!(match_rank(Some(&helper), "ChatGPT-helper", &launcher), 0);
+        fs::remove_file(&executable).unwrap();
+        assert_eq!(
+            sibling_launcher_target(&launcher.canonicalize().unwrap()),
+            None
+        );
+    }
+
+    #[test]
+    fn rejects_dynamic_or_complex_launcher_scripts() {
+        let fixture = Fixture::new();
+        fixture.executable("ChatGPT", "");
+        let trampoline = "exec \"$(dirname \"$(readlink -f \"$0\")\")/ChatGPT\" \"$@\"";
+        let marker = fixture.0.join("must-not-exist");
+        for source in [
+            format!("#!/bin/sh\ntouch {}\n{trampoline}\n", marker.display()),
+            format!("#!/bin/sh\n{trampoline}\ntouch {}\n", marker.display()),
+            format!(
+                "#!/bin/sh\n{}\n",
+                trampoline.replace("ChatGPT", "$(touch must-not-exist)")
+            ),
+            format!(
+                "#!/bin/sh\n{}\n",
+                trampoline.replace("ChatGPT", "../ChatGPT")
+            ),
+            format!("#!/bin/sh\n{}\n", trampoline.replace("ChatGPT", "$APP")),
+            format!("#!/bin/sh\n{trampoline}; touch {}\n", marker.display()),
+            format!("#!/usr/bin/python\n{trampoline}\n"),
+            format!("#!/bin/sh\n{trampoline}\n#{}", "x".repeat(4096)),
+        ] {
+            let launcher = fixture.executable("launcher", &source);
+            assert_eq!(sibling_launcher_target(&launcher), None, "{source}");
+        }
+        assert!(!marker.exists());
+        assert_eq!(sibling_launcher_target(&fixture.0), None);
+        let launcher = fixture.executable(
+            "launcher",
+            &format!("#!/bin/sh\n# Package launcher\n\n{trampoline}\n"),
+        );
+        assert_eq!(
+            sibling_launcher_target(&launcher),
+            Some(fixture.0.join("ChatGPT"))
+        );
+    }
+
+    #[test]
+    fn prefers_exact_paths_and_rejects_ambiguous_launcher_icons() {
+        let fixture = Fixture::new();
+        let (executable, launcher) = fixture.launcher();
+        let mut apps = vec![
+            fixture.app("one", launcher.to_str().unwrap(), "one"),
+            fixture.app("two", launcher.to_str().unwrap(), "two"),
+        ];
+        assert_eq!(select_icon(&apps, Some(&executable), "ChatGPT"), None);
+        apps.push(fixture.app("exact", executable.to_str().unwrap(), "exact"));
+        assert_eq!(
+            select_icon(&apps, Some(&executable), "ChatGPT"),
+            Some("exact".into())
+        );
+        apps.reverse();
+        assert_eq!(
+            select_icon(&apps, Some(&executable), "ChatGPT"),
+            Some("exact".into())
+        );
+    }
+
+    #[test]
     #[ignore = "requires a GTK display; run through test:application-icons"]
     fn renders_linux_icons() {
         gtk::init().unwrap();
@@ -207,6 +358,10 @@ mod tests {
             r##"<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256"><rect width="256" height="256" fill="#ff0000"/></svg>"##).unwrap();
         let theme = gtk::IconTheme::new();
         theme.prepend_search_path(&fixture.0);
+        let (executable, launcher) = fixture.launcher();
+        let app = fixture.app("chatgpt", launcher.to_str().unwrap(), "example");
+        let matched = select_icon(&[app], Some(&executable), "ChatGPT").unwrap();
+        assert!(render_with_theme(&theme, &matched).is_some());
         let data = render_with_theme(&theme, "example").unwrap();
         let png = glib::base64_decode(data.strip_prefix("data:image/png;base64,").unwrap());
         let file = fixture.0.join("absolute.png");
