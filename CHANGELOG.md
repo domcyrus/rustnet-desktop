@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Resolve Linux icons for updated executables marked `(deleted)` and shell launchers with a literal final executable path, including Signal.
 - Resolve Linux application icons for simple shell launchers that locate a sibling executable through a symlink, including ChatGPT. (#39)
 
 ### Changed

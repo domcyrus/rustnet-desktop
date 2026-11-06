@@ -10,7 +10,7 @@ pub fn find_icon(executable: Option<&str>, name: &str, pids: &[u32]) -> Option<S
         pids.iter().find_map(|pid| {
             let path = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
             // Do not assign an unrelated process's icon after PID reuse.
-            (path.file_name()?.to_str()? == name).then_some(path)
+            (icon_executable_path(&path).file_name()?.to_str()? == name).then_some(path)
         })
     });
     // GIO applies XDG data directory precedence and Hidden desktop overrides.
@@ -69,7 +69,7 @@ fn desktop_program(command: &Path) -> Option<PathBuf> {
 }
 
 fn match_rank(executable: Option<&Path>, name: &str, program: &Path) -> u8 {
-    let Some(executable) = executable else {
+    let Some(executable) = executable.map(icon_executable_path) else {
         return u8::from(program.file_name().is_some_and(|file| file == name));
     };
     let resolved = if program.is_absolute() {
@@ -85,7 +85,7 @@ fn match_rank(executable: Option<&Path>, name: &str, program: &Path) -> u8 {
             if left == right {
                 return 3;
             }
-            return if sibling_launcher_target(&right).as_deref() == Some(left.as_path()) {
+            return if launcher_target(&right).as_deref() == Some(left.as_path()) {
                 2
             } else {
                 0
@@ -101,8 +101,23 @@ fn match_rank(executable: Option<&Path>, name: &str, program: &Path) -> u8 {
     }
 }
 
-fn sibling_launcher_target(launcher: &Path) -> Option<PathBuf> {
-    // Recognize a single literal trampoline, never evaluate shell commands.
+fn icon_executable_path(path: &Path) -> &Path {
+    // procfs adds this marker after an executable is unlinked by an update.
+    // Normalize only icon lookup; retain real files whose names end this way.
+    if path.is_absolute()
+        && let Some(original) = path
+            .to_str()
+            .and_then(|path| path.strip_suffix(" (deleted)"))
+        && matches!(std::fs::symlink_metadata(path), Err(error) if error.kind() == std::io::ErrorKind::NotFound)
+    {
+        Path::new(original)
+    } else {
+        path
+    }
+}
+
+fn launcher_target(launcher: &Path) -> Option<PathBuf> {
+    // Read a bounded shell launcher to identify a literal target, never run it.
     // The caller canonicalizes the launcher, matching readlink -f "$0" below.
     const LIMIT: u64 = 4096;
     let metadata = std::fs::metadata(launcher).ok()?;
@@ -121,27 +136,58 @@ fn sibling_launcher_target(launcher: &Path) -> Option<PathBuf> {
     let mut lines = source.lines();
     if !matches!(
         lines.next()?,
-        "#!/bin/sh" | "#!/bin/bash" | "#!/usr/bin/sh" | "#!/usr/bin/bash"
+        "#!/bin/sh"
+            | "#!/bin/bash"
+            | "#!/usr/bin/sh"
+            | "#!/usr/bin/bash"
+            | "#!/usr/bin/env sh"
+            | "#!/usr/bin/env bash"
     ) {
         return None;
     }
-    let mut commands = lines
+    let commands: Vec<_> = lines
         .map(str::trim)
-        .filter(|line| !line.is_empty() && !line.starts_with('#'));
-    let target = commands
-        .next()?
-        .strip_prefix(r#"exec "$(dirname "$(readlink -f "$0")")/"#)?
-        .strip_suffix(r#"" "$@""#)?;
-    if commands.next().is_some()
-        || target.is_empty()
-        || matches!(target, "." | "..")
-        || !target
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"._+-".contains(&byte))
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+        .collect();
+    let command = *commands.last()?;
+    if commands.len() == 1
+        && let Some(target) = command
+            .strip_prefix(r#"exec "$(dirname "$(readlink -f "$0")")/"#)
+            .and_then(|target| target.strip_suffix(r#"" "$@""#))
+    {
+        if target.is_empty()
+            || matches!(target, "." | "..")
+            || !target
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"._+-".contains(&byte))
+        {
+            return None;
+        }
+        return launcher.parent()?.join(target).canonicalize().ok();
+    }
+    // Wrappers such as Signal read flags before a final `exec /absolute/path`.
+    // Only use that literal path, rejecting other execs and shell operators.
+    if commands[..commands.len() - 1]
+        .iter()
+        .any(|line| line.starts_with("exec "))
+        || command.contains([';', '|', '&', '<', '>', '`', '\\'])
+        || command.contains("$(")
     {
         return None;
     }
-    launcher.parent()?.join(target).canonicalize().ok()
+    let args = glib::shell_parse_argv(command).ok()?;
+    if args.first()? != "exec" {
+        return None;
+    }
+    let target = Path::new(args.get(1)?);
+    if !target.is_absolute()
+        || target
+            .to_str()?
+            .contains(['$', '*', '?', '[', ']', '{', '}', '~'])
+    {
+        return None;
+    }
+    target.canonicalize().ok()
 }
 
 pub fn render_icon(serialized: &str) -> Option<String> {
@@ -285,10 +331,7 @@ mod tests {
         let helper = fixture.executable("app/ChatGPT-helper", "");
         assert_eq!(match_rank(Some(&helper), "ChatGPT-helper", &launcher), 0);
         fs::remove_file(&executable).unwrap();
-        assert_eq!(
-            sibling_launcher_target(&launcher.canonicalize().unwrap()),
-            None
-        );
+        assert_eq!(launcher_target(&launcher.canonicalize().unwrap()), None);
     }
 
     #[test]
@@ -314,18 +357,15 @@ mod tests {
             format!("#!/bin/sh\n{trampoline}\n#{}", "x".repeat(4096)),
         ] {
             let launcher = fixture.executable("launcher", &source);
-            assert_eq!(sibling_launcher_target(&launcher), None, "{source}");
+            assert_eq!(launcher_target(&launcher), None, "{source}");
         }
         assert!(!marker.exists());
-        assert_eq!(sibling_launcher_target(&fixture.0), None);
+        assert_eq!(launcher_target(&fixture.0), None);
         let launcher = fixture.executable(
             "launcher",
             &format!("#!/bin/sh\n# Package launcher\n\n{trampoline}\n"),
         );
-        assert_eq!(
-            sibling_launcher_target(&launcher),
-            Some(fixture.0.join("ChatGPT"))
-        );
+        assert_eq!(launcher_target(&launcher), Some(fixture.0.join("ChatGPT")));
     }
 
     #[test]
@@ -347,6 +387,80 @@ mod tests {
             select_icon(&apps, Some(&executable), "ChatGPT"),
             Some("exact".into())
         );
+    }
+
+    #[test]
+    fn matches_signal_style_launchers_after_executable_updates() {
+        let fixture = Fixture::new();
+        let executable = fixture.executable("signal app/signal-desktop", "");
+        let marker = fixture.0.join("must-not-exist");
+        let launcher = fixture.executable("signal-desktop", &format!(
+            "#!/usr/bin/env bash\n\nFLAGS_FILE=\"${{XDG_CONFIG_HOME:-$HOME/.config}}/signal-desktop-flags.conf\"\n\
+             if [[ -f \"$FLAGS_FILE\" ]]; then\n  FLAGS=\"$(cat \"$FLAGS_FILE\")\"\nfi\n\
+             touch \"{}\"\n# Launch\nexec \"{}\" $FLAGS \"$@\"\n",
+            marker.display(), executable.display()
+        ));
+        let app = fixture.app("signal", launcher.to_str().unwrap(), "signal-desktop");
+        let deleted = PathBuf::from(format!("{} (deleted)", executable.display()));
+        for path in [&executable, &deleted] {
+            assert_eq!(match_rank(Some(path), "signal-desktop", &launcher), 2);
+            assert_eq!(
+                select_icon(std::slice::from_ref(&app), Some(path), "signal-desktop"),
+                Some("signal-desktop".into())
+            );
+        }
+        assert!(
+            !marker.exists(),
+            "icon lookup must never execute the launcher"
+        );
+        let other = fixture.executable("other/signal-desktop", "");
+        let other_deleted = PathBuf::from(format!("{} (deleted)", other.display()));
+        assert_eq!(
+            match_rank(Some(&other_deleted), "signal-desktop", &launcher),
+            0
+        );
+        let conflicting = fixture.app("conflicting", launcher.to_str().unwrap(), "another-icon");
+        assert_eq!(
+            select_icon(&[app, conflicting], Some(&deleted), "signal-desktop"),
+            None
+        );
+    }
+
+    #[test]
+    fn normalizes_only_missing_deleted_suffixes_for_icon_lookup() {
+        let fixture = Fixture::new();
+        let executable = fixture.executable("signal-desktop", "");
+        let deleted = PathBuf::from(format!("{} (deleted)", executable.display()));
+        assert_eq!(icon_executable_path(&deleted), executable);
+        assert_eq!(match_rank(Some(&deleted), "signal-desktop", &executable), 3);
+        // A literal filename ending this way must not be confused with procfs.
+        fixture.executable("signal-desktop (deleted)", "");
+        assert_eq!(icon_executable_path(&deleted), deleted);
+        assert_eq!(match_rank(Some(&deleted), "signal-desktop", &executable), 0);
+        assert_eq!(match_rank(Some(&deleted), "signal-desktop", &deleted), 3);
+        let relative = Path::new("signal-desktop (deleted)");
+        assert_eq!(icon_executable_path(relative), relative);
+        let middle = Path::new("/app (deleted)/signal-desktop");
+        assert_eq!(icon_executable_path(middle), middle);
+    }
+
+    #[test]
+    fn rejects_dynamic_or_ambiguous_absolute_launcher_targets() {
+        let fixture = Fixture::new();
+        let executable = fixture.executable("signal-desktop", "");
+        for command in [
+            "exec $APP $FLAGS \"$@\"".to_string(),
+            "exec signal-desktop \"$@\"".to_string(),
+            "exec /usr/lib/*/signal-desktop \"$@\"".to_string(),
+            format!("exec {} $(touch marker)", executable.display()),
+            format!("exec {} ; touch marker", executable.display()),
+            format!("exec {} | other-program", executable.display()),
+            format!("exec /bin/true\nexec {} \"$@\"", executable.display()),
+            format!("exec {} \"$@\"\necho later", executable.display()),
+        ] {
+            let launcher = fixture.executable("launcher", &format!("#!/bin/bash\n{command}\n"));
+            assert_eq!(launcher_target(&launcher), None, "{command}");
+        }
     }
 
     #[test]
