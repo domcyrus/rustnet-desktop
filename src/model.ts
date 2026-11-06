@@ -188,6 +188,13 @@ export interface CaptureView {
   error: string | null;
   export_path: string | null;
   snapshot: Snapshot | null;
+  history?: {
+    path: string;
+    active: boolean;
+    stored_snapshots: number;
+    dropped_snapshots: number;
+    error: string | null;
+  } | null;
 }
 export interface CaptureInterface {
   name: string;
@@ -373,6 +380,17 @@ export function parseView(value: unknown): CaptureView {
   )
     throw new Error("Invalid capture response");
   const s = value.snapshot;
+  const history = value.history;
+  if (
+    history != null &&
+    (!object(history) ||
+      typeof history.path !== "string" ||
+      typeof history.active !== "boolean" ||
+      !counter(history.stored_snapshots) ||
+      !counter(history.dropped_snapshots) ||
+      !optionalText(history.error))
+  )
+    throw new Error("Invalid traffic history status");
   if (s !== null) {
     if (
       !object(s) ||

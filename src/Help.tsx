@@ -2,8 +2,26 @@ import { useEffect, useRef } from "react";
 import { X } from "lucide-react";
 
 export type HelpContext =
-  "applications" | "connections" | "inspector" | "capture";
+  | "applications"
+  | "connections"
+  | "inspector"
+  | "capture"
+  | "history";
 const topics: Record<HelpContext, [string, string][]> = {
+  history: [
+    [
+      "Browse saved activity",
+      "Enable Save traffic history before capture. History opens with Applications, using cached native icons shared by executable reference; select an app to browse its Connections and individual counter samples. Traffic rate, observed connections and capture health panels share a cursor and time range. Drag across a graph to zoom and use Zoom out to return. Arrow keys inspect intervals; Enter zooms and Escape clears the cursor. Legends toggle series. Auto-refresh can be paused. After the first read, it fetches new or corrected samples and reuses the earlier window. Refresh history also updates minute summaries, session details and filter options. Refresh keeps the current graphs and selections visible while loading; slow queries finish before the next automatic refresh. Minute summaries and earlier history remain in a separate disclosure.",
+    ],
+    [
+      "Unusual activity on the timeline",
+      "Circled timeline markers show upload bursts, download bursts, connection bursts and newly observed destinations derived from ten-second samples. Select a marker for evidence, then Inspect traffic for that app and interval. Findings always describe application behavior, including when inspecting one connection. They are changes to investigate, not security verdicts.",
+    ],
+    [
+      "Learning and capture quality",
+      "Each executable/interface needs 180 earlier complete ten-second intervals (30 active minutes) within seven days. Comparisons use up to 720 intervals. Unknown deltas, resets, incomplete coverage, overlapping capture sessions and capture errors are excluded. Unusual quantitative samples do not train the baseline. The quality graph shows capture gaps and counter resets, not application error counts. Findings are recomputed from history, with no background notifications.",
+    ],
+  ],
   applications: [
     [
       "All traffic and coverage",
@@ -86,6 +104,7 @@ const topics: Record<HelpContext, [string, string][]> = {
   ],
 };
 const titles = {
+  history: "Saved history",
   applications: "Applications",
   connections: "Connections",
   inspector: "Connection inspector",

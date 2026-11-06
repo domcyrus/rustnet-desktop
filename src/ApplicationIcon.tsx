@@ -3,7 +3,12 @@ import { invoke, isTauri } from "@tauri-apps/api/core";
 import { Blocks, CircleHelp } from "lucide-react";
 import type { Application } from "./model";
 
-type IconRequest = { executable: string | null; name: string; pids: number[] };
+type IconRequest = {
+  executable: string | null;
+  name: string;
+  pids: number[];
+  historical?: boolean;
+};
 const icons = new Map<
   string,
   { promise: Promise<string | null>; expires: number }
@@ -37,14 +42,20 @@ function loadIcon(key: string): Promise<string | null> {
 export function ApplicationIcon({
   app,
   large = false,
+  historical = false,
 }: {
   app: Pick<Application, "executable" | "name" | "pids">;
   large?: boolean;
+  historical?: boolean;
 }) {
   const key = JSON.stringify({
     executable: app.executable || null,
     name: app.name,
-    pids: app.executable ? [] : [...app.pids].sort((a, b) => a - b).slice(0, 32),
+    pids:
+      historical || app.executable
+        ? []
+        : [...app.pids].sort((a, b) => a - b).slice(0, 32),
+    ...(historical ? { historical: true } : {}),
   });
   const [loaded, setLoaded] = useState<{ key: string; icon: string | null }>();
   const icon = loaded?.key === key ? loaded.icon : null;

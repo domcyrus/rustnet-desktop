@@ -36,6 +36,7 @@ import { Help } from "./Help";
 import { PanelDialog } from "./PanelDialog";
 import { MacosHelper } from "./MacosHelper";
 import { WindowsHelper } from "./WindowsHelper";
+import { SavedHistory } from "./SavedHistory";
 import { AllTraffic } from "./AllTraffic";
 import { ApplicationDetails } from "./ApplicationDetails";
 import { ApplicationIcon } from "./ApplicationIcon";
@@ -69,9 +70,11 @@ function savePreference(key: string, value: string) {
 
 export default function App() {
   const { navigation, navigate } = useNavigation(
-    preference("screen", "applications") === "connections"
-      ? "connections"
-      : "applications",
+    preference("screen", "applications") === "history"
+      ? "history"
+      : preference("screen", "applications") === "connections"
+        ? "connections"
+        : "applications",
   );
   const {
     screen,
@@ -102,6 +105,9 @@ export default function App() {
   );
   const [interfaceLoading, setInterfaceLoading] = useState(false);
   const [record, setRecord] = useState(false);
+  const [saveHistory, setSaveHistory] = useState(
+    () => preference("save-history", "false") === "true",
+  );
   const [geoipDirectory, setGeoipDirectory] = useState(() =>
     preference("geoip-directory", ""),
   );
@@ -225,6 +231,9 @@ export default function App() {
     savePreference("screen", screen);
   }, [screen]);
   useEffect(() => {
+    savePreference("save-history", String(saveHistory));
+  }, [saveHistory]);
+  useEffect(() => {
     document.documentElement.dataset.scrollbars = scrollbars;
     document.documentElement.dataset.density = density;
     savePreference("scrollbars", scrollbars);
@@ -277,7 +286,9 @@ export default function App() {
         ? dialog.querySelector<HTMLElement>(".scroll-region")
         : screen === "connections"
           ? connectionScroll.current
-          : appList.current;
+          : screen === "history"
+            ? document.querySelector<HTMLElement>(".saved-history")
+            : appList.current;
       if (scrollPane(event, pane)) return;
       if (document.querySelector(".panel-dialog[open]")) return;
       const editable =
@@ -411,6 +422,7 @@ export default function App() {
     const started = await invoke<boolean>("start_capture", {
       interface: chosenInterface,
       record,
+      saveHistory,
       geoipDirectory: geoipDirectory || null,
     });
     if (started) {
@@ -583,6 +595,13 @@ export default function App() {
             <ListFilter size={18} />
             Connections
           </button>
+          <button
+            aria-current={screen === "history" ? "page" : undefined}
+            onClick={() => navigate({ screen: "history" })}
+          >
+            <History size={18} />
+            Saved history
+          </button>
         </nav>
         <section className="sidebar-health" aria-label="Capture health">
           <span className="sandbox-status">
@@ -653,7 +672,13 @@ export default function App() {
       </aside>
       <main>
         <header>
-          <h1>{screen === "applications" ? "Applications" : "Connections"}</h1>
+          <h1>
+            {screen === "applications"
+              ? "Applications"
+              : screen === "history"
+                ? "Saved history"
+                : "Connections"}
+          </h1>
           <div className="header-actions">
             <span
               id="capture-state"
@@ -826,6 +851,23 @@ export default function App() {
                 <Download size={15} />
                 Record PCAPNG
               </label>
+              <label className="record-toggle">
+                <input
+                  type="checkbox"
+                  checked={saveHistory}
+                  disabled={busy}
+                  onChange={(e) => setSaveHistory(e.target.checked)}
+                  aria-describedby="traffic-history-hint"
+                />
+                <History size={15} />
+                Save traffic history
+              </label>
+              <p className="capture-hint" id="traffic-history-hint">
+                Keep local traffic summaries and destinations for 30 days.
+                Continues while the view is hidden or frozen. Packet contents
+                are excluded. Remembered across app restarts. Applies when
+                capture starts.
+              </p>
               {active && (
                 <button
                   className="button"
@@ -918,43 +960,68 @@ export default function App() {
             </span>
           </div>
         )}
-        <section className="summary" aria-label="Traffic summary">
-          <Metric
-            icon={<ArrowDownLeft />}
-            label="Receiving"
-            value={snapshot ? bytes(rx, true) : "Waiting"}
-            caption="2-second average · tracked connections"
-          />
-          <Metric
-            icon={<ArrowUpRight />}
-            label="Sending"
-            value={snapshot ? bytes(tx, true) : "Waiting"}
-            caption="2-second average · tracked connections"
-          />
-          <Metric
-            icon={<Activity />}
-            label="Active connections"
-            value={String(live.length)}
-            caption={`${apps.length} application groups · ${unknown} unattributed`}
-          />
-          <button
-            className="button freeze"
-            disabled={!snapshot}
-            aria-pressed={paused}
-            onClick={togglePaused}
+        {view.history && (
+          <div
+            className={
+              view.history.error || view.history.dropped_snapshots
+                ? "notice warning"
+                : "recording-info"
+            }
           >
-            {paused ? <Play size={15} /> : <Pause size={15} />}
-            {paused ? "Resume view" : "Freeze view"}
-          </button>
-        </section>
-        {paused && (
+            <History size={14} />
+            <span>
+              {view.history.active
+                ? "Saving traffic history to"
+                : "Traffic history"}{" "}
+              <strong>{view.history.path}</strong>
+              {view.history.error &&
+                ` · History stopped: ${view.history.error}`}
+              {view.history.dropped_snapshots > 0 &&
+                ` · ${view.history.dropped_snapshots} snapshots not saved; history is incomplete`}
+            </span>
+          </div>
+        )}
+        {screen !== "history" && (
+          <section className="summary" aria-label="Traffic summary">
+            <Metric
+              icon={<ArrowDownLeft />}
+              label="Receiving"
+              value={snapshot ? bytes(rx, true) : "Waiting"}
+              caption="2-second average · tracked connections"
+            />
+            <Metric
+              icon={<ArrowUpRight />}
+              label="Sending"
+              value={snapshot ? bytes(tx, true) : "Waiting"}
+              caption="2-second average · tracked connections"
+            />
+            <Metric
+              icon={<Activity />}
+              label="Active connections"
+              value={String(live.length)}
+              caption={`${apps.length} application groups · ${unknown} unattributed`}
+            />
+            <button
+              className="button freeze"
+              disabled={!snapshot}
+              aria-pressed={paused}
+              onClick={togglePaused}
+            >
+              {paused ? <Play size={15} /> : <Pause size={15} />}
+              {paused ? "Resume view" : "Freeze view"}
+            </button>
+          </section>
+        )}
+        {paused && screen !== "history" && (
           <div className="freeze-note" role="status">
             View frozen at{" "}
             {snapshot && new Date(snapshot.timestamp).toLocaleTimeString()}.
             Capture and recording continue.
           </div>
         )}
-        {screen === "connections" ? (
+        {screen === "history" ? (
+          <SavedHistory onCaptureSettings={() => setCaptureSettings(true)} />
+        ) : screen === "connections" ? (
           <div className="workbench">
             <section className="connection-list" aria-label="Connections">
               <section className="filter-bar" aria-label="Connection filters">

@@ -112,6 +112,7 @@ export function useCapture() {
                       ...previous.rates.view,
                       status: next.status,
                       error: next.error,
+                      history: next.history,
                       export_path: next.export_path,
                     },
                   },
