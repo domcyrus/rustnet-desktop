@@ -2,6 +2,8 @@
 
 [English](BUILDING.md) | [简体中文](BUILDING.zh-CN.md) | [日本語](BUILDING.ja.md)
 
+若要为 Arch Linux 构建，且不在宿主机安装 Node.js、pnpm 或 Rust，请使用下方的[容器构建](#arch-linux-容器构建)。
+
 此流程在 macOS 或 Linux 上限制依赖脚本、构建工具和测试对宿主机的访问。先安装常规平台依赖、通过 rustup 安装的 Rust、Node.js，以及 `package.json` 固定版本的 pnpm。这些工具和仓库中的启动脚本属于可信输入。Linux 还需要 Bubblewrap（Debian/Ubuntu 可运行 `sudo apt-get install bubblewrap`），并支持非特权用户命名空间。macOS 需要系统的 `sandbox-exec`。此流程不支持 Windows。
 
 在启用 AppArmor 用户命名空间限制的 Ubuntu 上，还需管理员启用发行版提供的 `bwrap-userns-restrict` 配置（Ubuntu 24.04 由 `apparmor-profiles` 提供）。参见 [Ubuntu 命名空间说明](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007)。启动器不会修改系统策略或禁用 AppArmor；命名空间初始化失败会停止构建。
@@ -30,6 +32,38 @@ node scripts/isolated-build.mjs --build-only
 ```
 
 `--build-only` 使用上次下载时的源码快照，不包含之后的检出目录修改；缺少依赖时会离线失败。普通调用重新复制源码，仅复用专用缓存。确认没有构建或启动的桌面程序运行后，可删除 `.isolated-build/` 以清空缓存。`.isolated-build.lock/` 阻止并发构建及 sudo 会话；强制终止后，只有确认旧会话已退出才能删除该锁。
+
+## Arch Linux 容器构建
+
+Dockerfile 使用 Arch Linux 软件包生成优化的 x86_64 Linux 可执行文件。构建宿主机只需 Docker（使用当前默认的 BuildKit）或 Podman，以及 Bash 和标准 Unix 工具，无需安装 Node.js、pnpm、Rust 或 Bubblewrap。在仓库目录执行：
+
+```sh
+./scripts/build-container.sh
+```
+
+脚本构建镜像，使用本次构建的确切结果创建停止状态的容器，将两个二进制复制到 `dist/linux/`，然后删除临时容器。通过脚本路径调用时，可从任意目录运行。构建或提取失败会保留已有二进制。请将 `dist/linux/rustnet-desktop` 和 `dist/linux/rustnet-capture-engine` 放在同一目录。最终镜像仅包含这两个可执行文件，用于提取，不用于 `docker run`，脚本不会启动程序。也可通过 `docker build --pull --output type=local,dest=dist/container .` 直接导出，文件位于 `dist/container/out/`。
+
+使用 rootless Podman 时，运行 `./scripts/build-container.sh --runtime podman`，不要使用 sudo。Docker 也支持 [rootless 模式](https://docs.docker.com/engine/security/rootless/)。现有 rootful Docker 可以使用，但其守护进程仍拥有宿主机 root 权限。本流程不会配置容器运行时或修改宿主机策略。
+
+### 容器隔离
+
+Docker/Podman 提供构建沙箱，无需嵌套 Bubblewrap 或使用特权模式。系统软件包和固定版本的 pnpm 以容器 root 身份安装。项目依赖下载、编译和测试以非特权 `builder` 用户运行，并启用 `no_new_privs`。`.dockerignore` 白名单仅发送构建输入，排除 Git 元数据、宿主机缓存和常见凭据文件。构建前请检查允许的源码目录，写入源码的秘密信息仍属于构建输入。构建步骤不会挂载宿主机目录、Docker socket、SSH agent 或秘密信息。
+
+下载阶段允许联网，验证引擎补丁哈希，下载锁定依赖，并禁用 pnpm 生命周期脚本和 pnpmfile 钩子。编译和测试使用 `RUN --network=none`，pnpm 和 Cargo 均离线运行。导出前必须通过与本地隔离构建相同的前端测试、引擎源码测试、Rust 测试、格式检查和 Clippy。失败会停止构建，不要通过添加 `--privileged`、宿主机网络或不安全的构建授权绕过失败。
+
+容器与宿主机共享内核，隔离不能证明二进制可信。Rootless Docker 或 Podman 可降低容器运行时权限；需要更强边界时请使用一次性虚拟机。基础镜像和 Arch 软件包持续更新，因此不保证逐位可复现。脚本始终使用 `--pull` 更新基础镜像；`./scripts/build-container.sh --no-cache` 还会重新安装软件包并执行全部构建步骤。仓库仍锁定 pnpm 依赖、Rust 依赖和引擎版本。
+
+### 在 Arch Linux 上运行
+
+构建架构必须与宿主机一致。本流程面向当前的 Arch Linux x86_64，不面向较旧发行版或 ARM。请更新宿主机，使运行时库与构建环境匹配：
+
+```sh
+sudo pacman -Syu --needed webkit2gtk-4.1 gtk3 libayatana-appindicator librsvg libpcap libelf
+sudo setcap cap_net_raw+eip dist/linux/rustnet-capture-engine
+./dist/linux/rustnet-desktop
+```
+
+上述 capability 支持不使用 eBPF 的抓包。仅在提取可信构建后设置，替换引擎后需重新设置。界面以普通用户运行，Node.js 和 pnpm 不是运行时依赖，前端资源已内嵌。构建沙箱不限制启动后的桌面程序。其他引擎要求见[抓包权限](docs/GUIDE.zh-CN.md#抓包权限)。若窗口空白，可尝试 `WEBKIT_DISABLE_DMABUF_RENDERER=1 ./dist/linux/rustnet-desktop`。
 
 ## 构建完成后使用 sudo 抓包
 

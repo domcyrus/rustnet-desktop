@@ -80,6 +80,7 @@ pnpm run desktop
 | **Windows** | 安装 MSVC 工具链、WebView2，以及允许普通用户访问的 Npcap。 |
 
 macOS 和 Linux 的隔离构建方式见[构建指南](BUILDING.zh-CN.md)。
+Arch Linux 可使用[容器构建](BUILDING.zh-CN.md#arch-linux-容器构建)，无需在宿主机安装 Node.js 或 Rust。
 更喜欢终端界面？试试 [RustNet](https://github.com/domcyrus/rustnet)。
 
 ## 深入了解

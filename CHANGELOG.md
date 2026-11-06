@@ -16,6 +16,7 @@
 - Simplify desktop capture state, traffic histories, and shared UI components; remove obsolete styles and unreachable UI. (#5)
 
 ### Added
+- Add an Arch Linux container build script with offline compilation and tests, exporting both executables without host Node.js or Rust. (#38)
 - Add native Windows application icons from executable files, with PID path lookup and placeholder fallback.
 - Show cached native macOS and Linux application icons in the application list and details. Linux uses installed desktop entries and the active icon theme; unavailable or ambiguous icons retain placeholders.
 - Add `desktop:sudo --no-build` to authenticate and launch existing debug artifacts without rebuilding or running tests.

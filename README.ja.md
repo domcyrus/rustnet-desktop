@@ -83,6 +83,7 @@ pnpm run desktop
 | **Windows** | MSVC ツールチェーン、WebView2、通常ユーザーがアクセスできる Npcap をインストールします。 |
 
 macOS と Linux の隔離ビルドは[ビルドガイド](BUILDING.ja.md)を参照してください。
+Arch Linux では[コンテナビルド](BUILDING.ja.md#arch-linux-コンテナビルド)を使うと、ホストに Node.js や Rust をインストールする必要がありません。
 ターミナル UI をお探しなら、[RustNet](https://github.com/domcyrus/rustnet)をお試しください。
 
 ## さらに詳しく

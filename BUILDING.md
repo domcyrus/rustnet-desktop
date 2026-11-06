@@ -2,6 +2,8 @@
 
 [English](BUILDING.md) | [简体中文](BUILDING.zh-CN.md) | [日本語](BUILDING.ja.md)
 
+To build for Arch Linux without installing Node.js, pnpm or Rust on the host, use the [container build](#arch-linux-container-build) below.
+
 Use this workflow on macOS or Linux to reduce the host access available to dependency scripts, build tools and tests. Install the normal platform prerequisites, Rust through rustup, Node.js and the pnpm version pinned in `package.json` first. These tools and this repository's launcher scripts are trusted inputs. On Linux, also install Bubblewrap (`sudo apt-get install bubblewrap` on Debian/Ubuntu); unprivileged user namespaces must be available. macOS requires the system `sandbox-exec` command. Windows is unsupported by this workflow.
 
 On Ubuntu with AppArmor user-namespace restrictions, an administrator must also enable the distribution's `bwrap-userns-restrict` profile (provided by `apparmor-profiles` on Ubuntu 24.04). See [Ubuntu's namespace guidance](https://discourse.ubuntu.com/t/understanding-apparmor-user-namespace-restriction/58007). The launcher does not change system policy or disable AppArmor; a namespace setup failure stops the build.
@@ -30,6 +32,38 @@ node scripts/isolated-build.mjs --build-only
 ```
 
 `--build-only` uses the last fetched source snapshot, not subsequent checkout edits. Missing dependencies fail offline. A normal invocation takes a new snapshot and reuses only the dedicated caches. Remove `.isolated-build/` while no build or launched desktop is running to start with empty caches. Concurrent builds and sudo sessions are rejected by `.isolated-build.lock/`; after a forced termination, remove that lock only after confirming the previous session has exited.
+
+## Arch Linux container build
+
+The Dockerfile builds optimized x86_64 Linux executables using Arch Linux packages. Only Docker with BuildKit (the default in current Docker) or Podman, plus Bash and standard Unix tools, is needed on the build host. No host Node.js, pnpm, Rust or Bubblewrap installation is needed. Run from the repository:
+
+```sh
+./scripts/build-container.sh
+```
+
+The script builds the image, creates a stopped container from the exact build result, copies both binaries to `dist/linux/`, and removes the temporary container. It works from any directory when invoked by its path. Build or extraction failures preserve the previous binaries. Keep `dist/linux/rustnet-desktop` and `dist/linux/rustnet-capture-engine` together. The final image contains only those two executables and is for extraction, not `docker run`; the script does not launch them. Alternatively, Docker can export them directly with `docker build --pull --output type=local,dest=dist/container .`; they appear in `dist/container/out/`.
+
+For rootless Podman, use `./scripts/build-container.sh --runtime podman` without sudo. Docker also supports [rootless mode](https://docs.docker.com/engine/security/rootless/); existing rootful Docker works, but its daemon retains host root privileges. The recipe does not configure either runtime or change host policy.
+
+### Container isolation
+
+Docker/Podman provides the build sandbox, without nesting Bubblewrap or requiring privileged mode. System packages and the pinned pnpm tool are installed as container root. Project dependency fetching, compilation and tests run as an unprivileged `builder` user with `no_new_privs`. The `.dockerignore` allowlist sends only build inputs, excluding Git metadata, host caches and common credential files. Review allowed source directories before building; secrets embedded in source are still inputs. No host directories, Docker socket, SSH agent or secrets are mounted into build steps.
+
+The fetch step has network access, verifies engine patch hashes, fetches locked dependencies and disables pnpm lifecycle scripts and pnpmfile hooks. Compilation and tests use `RUN --network=none`, offline pnpm and offline Cargo. The same frontend tests, engine-source tests, Rust tests, formatting and Clippy checks as the local isolated workflow must pass before export. Failures stop the build. Do not add `--privileged`, host networking or insecure build entitlements to work around failures.
+
+Container isolation shares the host kernel and does not prove the binaries are trustworthy. Rootless Docker or Podman reduces the privileges of the container runtime; use a disposable VM for a stronger boundary. The base image and Arch packages are rolling inputs, so this is not a bit-for-bit reproducible build. The script always uses `--pull` to refresh the base image; `./scripts/build-container.sh --no-cache` also reruns package installation and all build steps. pnpm dependencies, Rust dependencies and the engine revision remain locked by the repository.
+
+### Run on Arch Linux
+
+Build for the same architecture as the host. This recipe targets current Arch Linux x86_64, not older distributions or ARM. Keep the host up to date with the builder's runtime libraries:
+
+```sh
+sudo pacman -Syu --needed webkit2gtk-4.1 gtk3 libayatana-appindicator librsvg libpcap libelf
+sudo setcap cap_net_raw+eip dist/linux/rustnet-capture-engine
+./dist/linux/rustnet-desktop
+```
+
+The capability above enables capture without eBPF. Apply it only after extracting a trusted build, and reapply it when replacing the engine. The UI runs as your normal user. Node.js and pnpm are not runtime dependencies, and frontend assets are embedded. This build sandbox does not sandbox the launched desktop. See [capture permissions](docs/GUIDE.md#capture-permissions) for additional engine requirements. For a blank window, try `WEBKIT_DISABLE_DMABUF_RENDERER=1 ./dist/linux/rustnet-desktop`.
 
 ## Sudo capture after building
 
