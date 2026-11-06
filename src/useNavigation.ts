@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export type Navigation = {
-  screen: "applications" | "connections";
+  screen: "applications" | "connections" | "history";
   connection: string | null;
   application: string | null;
   applicationFilter: { key: string; label: string } | null;

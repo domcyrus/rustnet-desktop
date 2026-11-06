@@ -4,6 +4,7 @@ mod application_icons;
 #[cfg(all(target_os = "macos", debug_assertions))]
 mod dev_sudo;
 mod engine;
+mod history;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(windows)]
@@ -27,6 +28,7 @@ async fn application_icon(
     executable: Option<String>,
     name: String,
     pids: Vec<u32>,
+    historical: Option<bool>,
 ) -> Result<Option<String>, String> {
     if executable.as_ref().is_some_and(|path| path.len() > 4096)
         || name.len() > 256
@@ -34,6 +36,47 @@ async fn application_icon(
     {
         return Ok(None);
     }
+    let historical = historical.unwrap_or(false);
+    let cache_path = _app
+        .path()
+        .app_local_data_dir()
+        .ok()
+        .map(|p| p.join("application-icons.sqlite3"));
+    if historical {
+        let path = cache_path.clone();
+        let key = executable.clone();
+        let saved = tauri::async_runtime::spawn_blocking(move || {
+            application_icons::persisted(path, key, None)
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+        if saved.is_some() {
+            return Ok(saved);
+        }
+    }
+    let key = executable.clone();
+    // A historical PID may now belong to a completely different process.
+    let icon = native_application_icon(
+        _app,
+        executable,
+        name,
+        if historical { Vec::new() } else { pids },
+    )
+    .await
+    .unwrap_or(None);
+    tauri::async_runtime::spawn_blocking(move || {
+        application_icons::persisted(cache_path, key, icon)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+async fn native_application_icon(
+    _app: tauri::AppHandle,
+    executable: Option<String>,
+    name: String,
+    pids: Vec<u32>,
+) -> Result<Option<String>, String> {
     #[cfg(target_os = "linux")]
     {
         let icon = tauri::async_runtime::spawn_blocking(move || {
@@ -63,6 +106,56 @@ async fn application_icon(
 #[tauri::command]
 async fn list_interfaces() -> Result<serde_json::Value, String> {
     engine::interfaces().await
+}
+
+#[tauri::command]
+async fn saved_history(
+    app: tauri::AppHandle,
+    query: rustnet_analytics::HistoryQuery,
+) -> Result<rustnet_analytics::HistoryReport, String> {
+    let path = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("traffic-history.sqlite3");
+    tauri::async_runtime::spawn_blocking(move || {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_millis() as i64;
+        rustnet_analytics::read_history(&path, &query, now).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn connection_history(
+    app: tauri::AppHandle,
+    query: rustnet_analytics::HistoryQuery,
+    connection_id: Option<i64>,
+    cursor: Option<u64>,
+    cache: State<'_, std::sync::Arc<std::sync::Mutex<rustnet_analytics::SeriesCache>>>,
+) -> Result<rustnet_analytics::SeriesReport, String> {
+    let path = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("traffic-history.sqlite3");
+    let cache = cache.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_millis() as i64;
+        cache
+            .lock()
+            .map_err(|e| e.to_string())?
+            .read(&path, &query, connection_id, cursor, now)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -112,11 +205,22 @@ async fn start_capture(
     state: State<'_, Desktop>,
     interface: String,
     record: bool,
+    save_history: Option<bool>,
     geoip_directory: Option<String>,
 ) -> Result<bool, String> {
     if state.exiting.load(Ordering::Relaxed) {
         return Err("Desktop is closing".into());
     }
+    let history_path = if save_history.unwrap_or(false) {
+        Some(
+            app.path()
+                .app_local_data_dir()
+                .map_err(|e| e.to_string())?
+                .join("traffic-history.sqlite3"),
+        )
+    } else {
+        None
+    };
     let export = if record {
         let path = tauri::async_runtime::spawn_blocking(move || {
             app.dialog()
@@ -140,7 +244,12 @@ async fn start_capture(
         return Err("Desktop is closing".into());
     }
     engine
-        .start(interface, export, geoip_directory.map(Into::into))
+        .start(
+            interface,
+            export,
+            geoip_directory.map(Into::into),
+            history_path,
+        )
         .await?;
     Ok(true)
 }
@@ -185,9 +294,14 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(Desktop::default())
+        .manage(std::sync::Arc::new(std::sync::Mutex::new(
+            rustnet_analytics::SeriesCache::default(),
+        )))
         .invoke_handler(tauri::generate_handler![
             list_interfaces,
             capture_view,
+            saved_history,
+            connection_history,
             start_capture,
             choose_geoip_directory,
             stop_capture,

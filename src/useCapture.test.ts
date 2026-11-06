@@ -43,10 +43,12 @@ it("polls status while frozen and fetches the newest data on resume", async () =
   await act(async () => result.current.togglePaused());
   const frozen = result.current.display;
   expect(invoke).toHaveBeenLastCalledWith("capture_view", { known: null, includeSnapshot: false });
-  const stopped = { ...view, revision: 10, status: "error", error: "Capture failed", snapshot: null };
+  const history = { path: "/tmp/history.db", active: false, stored_snapshots: 12, dropped_snapshots: 1, error: "Database is full" };
+  const stopped = { ...view, history, revision: 10, status: "error", error: "Capture failed", snapshot: null };
   vi.mocked(invoke).mockResolvedValueOnce(stopped);
   await act(() => vi.advanceTimersByTimeAsync(500));
   expect(result.current.view.error).toBe("Capture failed");
+  expect(result.current.view.history).toEqual(history);
   expect(result.current.display).toBe(frozen);
   expect(result.current.view.snapshot).toBe(frozen.rates.view.snapshot);
   const latest = structuredClone(view);

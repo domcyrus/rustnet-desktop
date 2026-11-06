@@ -8,6 +8,14 @@
 
 ### Changed
 - Remove the extra focus rectangle around selected connection names while keeping the row highlight.
+- Show shared application icons in saved and live connection rows, without using retained PIDs for icon lookup.
+- Show native icons in saved applications and retain deduplicated PNGs with bounded executable references across restarts.
+- Refresh sampled history incrementally with bounded caches, correction-aware cursors and reused anomaly baselines; load legacy summaries on demand.
+- Refresh saved history in place, preserve graph state, and wait for slow queries before polling again.
+- Add history dashboard panels with time-series lines, a shared cursor, drag-to-zoom, anomaly annotations and optional auto-refresh.
+- Detect unusual activity from ten-second samples, mark it on the timeline, and add application/connection browsing with traffic and capture-quality graphs.
+- Store ten-second connection counters with separate metadata and a zoomable history timeline. Preserve earlier minute summaries.
+- Remember the Save traffic history setting across app restarts.
 - Apply Prism throughout the desktop, with inline three-column connection details, one shared list/detail scroll area, keyboard scrolling, neutral warnings, and saved scrollbar/row-density preferences. Keep the traffic overview compact, remove duplicate headings, and separate live summary metrics.
 - Validate incoming capture JSON once and forward it through the raw IPC response; optimize JSON parsing in debug desktop builds.
 - Cache unchanged historic connection JSON in the capture engine, including extended metadata, with bounded retention and unchanged snapshot output.
@@ -21,6 +29,8 @@
 
 ### Added
 - Add an Arch Linux container build script with offline compilation and tests, exporting both executables without host Node.js or Rust. (#38)
+- Add Saved history with time/app/interface filters, traffic and session browsing, and explainable upload, connection and destination findings based on prior observations.
+- Add opt-in SQLite traffic history in a separate Rust analytics crate, with minute summaries, destination tracking, coverage gaps, and 30-day retention.
 - Add native Windows application icons from executable files, with PID path lookup and placeholder fallback.
 - Show cached native macOS and Linux application icons in the application list and details. Linux uses installed desktop entries and the active icon theme; unavailable or ambiguous icons retain placeholders.
 - Add `desktop:sudo --no-build` to authenticate and launch existing debug artifacts without rebuilding or running tests.

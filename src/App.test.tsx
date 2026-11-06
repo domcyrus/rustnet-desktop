@@ -88,6 +88,13 @@ beforeEach(() => {
     if (command === "macos_helper") return null;
     if (command === "windows_capture_helper") return false;
     if (command === "application_icon") return null;
+    if (command === "saved_history")
+      return {
+        exists: false,
+        applications: [],
+        interfaces: [],
+        analysis: { findings: [] },
+      };
     throw new Error(`Unexpected command ${command}`);
   });
 });
@@ -106,6 +113,29 @@ async function selectOption(label: string, option: string) {
 }
 
 describe("desktop workflow", () => {
+  it("opens saved history without starting capture and keeps it separate from live traffic", async () => {
+    view = { ...idle };
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Saved history" }));
+    expect(await screen.findByText("No saved history yet")).toBeTruthy();
+    expect(
+      screen.queryByRole("region", { name: "Traffic summary" }),
+    ).toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "Saved history" })
+        .getAttribute("aria-current"),
+    ).toBe("page");
+    expect(
+      vi
+        .mocked(invoke)
+        .mock.calls.some(([command]) => command === "start_capture"),
+    ).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Connections" }));
+    expect(
+      await screen.findByRole("button", { name: "Show historic connections" }),
+    ).toBeTruthy();
+  });
   it("restores the list scroll and keyboard focus after inspecting, and resets for a new filter", async () => {
     const { container } = render(<App />);
     await screen.findByRole("button", { name: /Firefox.*1 connections/ });
@@ -345,6 +375,7 @@ describe("desktop workflow", () => {
       expect(invoke).toHaveBeenCalledWith("start_capture", {
         interface: "",
         record: false,
+        saveHistory: false,
         geoipDirectory: "/data/GeoIP databases",
       }),
     );
@@ -359,6 +390,7 @@ describe("desktop workflow", () => {
       expect(invoke).toHaveBeenCalledWith("start_capture", {
         interface: "",
         record: false,
+        saveHistory: false,
         geoipDirectory: null,
       }),
     );
@@ -609,9 +641,72 @@ describe("desktop workflow", () => {
       expect(invoke).toHaveBeenCalledWith("start_capture", {
         interface: "lo",
         record: true,
+        saveHistory: false,
         geoipDirectory: null,
       }),
     );
+  });
+  it("remembers the history preference across mounts, independently of packet recording", async () => {
+    view = { ...idle };
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Capture settings" }));
+    await selectOption("Capture interface", "lo · Loopback");
+    const history = screen.getByRole("checkbox", {
+      name: "Save traffic history",
+    });
+    expect((history as HTMLInputElement).checked).toBe(false);
+    fireEvent.click(history);
+    expect(localStorage.getItem("rustnet.save-history")).toBe("true");
+    cleanup();
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Capture settings" }));
+    await selectOption("Capture interface", "lo · Loopback");
+    expect(
+      (
+        screen.getByRole("checkbox", {
+          name: "Save traffic history",
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Start capture" }));
+    await waitFor(() =>
+      expect(invoke).toHaveBeenCalledWith("start_capture", {
+        interface: "lo",
+        record: false,
+        saveHistory: true,
+        geoipDirectory: null,
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Capture settings" }));
+    fireEvent.click(
+      screen.getByRole("checkbox", { name: "Save traffic history" }),
+    );
+    expect(localStorage.getItem("rustnet.save-history")).toBe("false");
+    cleanup();
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "Capture settings" }));
+    expect(
+      (
+        screen.getByRole("checkbox", {
+          name: "Save traffic history",
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(false);
+  });
+  it("shows incomplete traffic history separately from capture failures", async () => {
+    view.history = {
+      path: "/data/traffic-history.sqlite3",
+      active: false,
+      stored_snapshots: 10,
+      dropped_snapshots: 2,
+      error: "Database is full",
+    };
+    render(<App />);
+    expect(
+      await screen.findByText(/History stopped: Database is full/),
+    ).toBeTruthy();
+    expect(screen.getByText(/2 snapshots not saved/)).toBeTruthy();
+    expect(screen.queryByText(/Capture did not finish cleanly/)).toBeNull();
   });
   it("renders network names as text, never HTML", async () => {
     view.snapshot!.connections[0].hostname = "<img src=x onerror=alert(1)>";
@@ -797,6 +892,7 @@ describe("desktop workflow", () => {
       expect(invoke).toHaveBeenCalledWith("start_capture", {
         interface: "any",
         record: false,
+        saveHistory: false,
         geoipDirectory: null,
       }),
     );

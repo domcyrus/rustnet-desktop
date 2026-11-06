@@ -28,11 +28,12 @@ pub struct CaptureView {
     pub error: Option<String>,
     pub export_path: Option<String>,
     pub snapshot: Option<Arc<Snapshot>>,
+    pub history: Option<crate::history::Status>,
 }
 
 // Keep the validated wire document intact instead of allocating a JSON tree.
 pub struct Snapshot {
-    json: String,
+    pub(crate) json: String,
     status: String,
     error: Option<String>,
 }
@@ -69,6 +70,8 @@ pub struct CaptureCursor {
     status: String,
     error: Option<String>,
     export_path: Option<String>,
+    #[serde(default)]
+    history: Option<crate::history::Status>,
 }
 
 impl CaptureView {
@@ -79,6 +82,7 @@ impl CaptureView {
             status: self.status.clone(),
             error: self.error.clone(),
             export_path: self.export_path.clone(),
+            history: self.history.clone(),
         }
     }
 
@@ -112,12 +116,14 @@ struct Running {
 pub struct Engine {
     running: Option<Running>,
     view: SharedView,
+    history: Option<crate::history::SharedStatus>,
 }
 
 impl Default for Engine {
     fn default() -> Self {
         Self {
             running: None,
+            history: None,
             view: Arc::new(Mutex::new(CaptureView {
                 status: "idle".into(),
                 ..CaptureView::default()
@@ -138,10 +144,12 @@ impl Engine {
         known: Option<&CaptureCursor>,
         include_snapshot: bool,
     ) -> Option<CaptureView> {
-        self.view
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .update(known, include_snapshot)
+        let mut view = self.view.lock().unwrap_or_else(|e| e.into_inner());
+        view.history = self
+            .history
+            .as_ref()
+            .map(|status| status.lock().unwrap_or_else(|e| e.into_inner()).clone());
+        view.update(known, include_snapshot)
     }
 
     pub async fn start(
@@ -149,6 +157,7 @@ impl Engine {
         interface: String,
         export: Option<PathBuf>,
         geoip_directory: Option<PathBuf>,
+        history_path: Option<PathBuf>,
     ) -> Result<(), String> {
         if self.is_active() {
             return Err("A capture is already active. Stop it before changing interfaces.".into());
@@ -164,7 +173,24 @@ impl Engine {
         {
             return Err("Choose a new filename. Existing captures are never overwritten.".into());
         }
-        let process = launch(interface, export.clone(), geoip_directory).await?;
+        let writer = match history_path {
+            Some(path) => Some(
+                crate::history::Writer::start(path, interface.clone())
+                    .await
+                    .map_err(|e| format!("Unable to open traffic history: {e}"))?,
+            ),
+            None => None,
+        };
+        let process = match launch(interface, export.clone(), geoip_directory).await {
+            Ok(process) => process,
+            Err(error) => {
+                if let Some(writer) = writer {
+                    writer.finish().await;
+                }
+                return Err(error);
+            }
+        };
+        self.history = writer.as_ref().map(|w| w.status.clone());
         let (stop, receive) = oneshot::channel();
         {
             let mut view = self.view.lock().unwrap_or_else(|e| e.into_inner());
@@ -179,19 +205,23 @@ impl Engine {
         self.running = Some(Running {
             stop,
             task: tokio::spawn(async move {
+                let history = writer.as_ref().map(|w| w.sink.clone());
                 match process {
                     #[cfg(not(windows))]
                     CaptureProcess::Local(child, sudo) => {
-                        supervise(child, receive, view, sudo).await
+                        supervise(child, receive, view, sudo, history).await
                     }
                     #[cfg(target_os = "macos")]
                     CaptureProcess::Helper(capture) => {
-                        supervise_helper(*capture, receive, view).await
+                        supervise_helper(*capture, receive, view, history).await
                     }
                     #[cfg(windows)]
                     CaptureProcess::Windows(capture) => {
-                        supervise_windows(*capture, receive, view).await
+                        supervise_windows(*capture, receive, view, history).await
                     }
+                }
+                if let Some(writer) = writer {
+                    writer.finish().await;
                 }
             }),
         });
@@ -498,8 +528,10 @@ fn validate_snapshot(json: &str) -> Result<(String, Option<String>), String> {
 async fn read_snapshots(
     mut reader: impl AsyncBufRead + Unpin,
     view: SharedView,
+    history: Option<crate::history::Sink>,
 ) -> Result<(), String> {
     let mut line = Vec::new();
+    let mut sequence = 0;
     loop {
         line.clear();
         let count = (&mut reader)
@@ -516,7 +548,11 @@ async fn read_snapshots(
         // Transfer the record into the snapshot without another JSON scan or
         // byte copy. Reserve the next read buffer at the observed record size.
         let bytes = std::mem::replace(&mut line, Vec::with_capacity(count));
-        let snapshot = decode_snapshot(bytes)?;
+        let snapshot = Arc::new(decode_snapshot(bytes)?);
+        sequence += 1;
+        if let Some(history) = &history {
+            history.submit(sequence, snapshot.clone());
+        }
         let mut view = view.lock().unwrap_or_else(|e| e.into_inner());
         // A late running snapshot cannot undo an explicit stop request.
         if view.status != "stopping" {
@@ -526,7 +562,7 @@ async fn read_snapshots(
             view.error = Some(error.clone());
         }
         view.revision += 1;
-        view.snapshot = Some(Arc::new(snapshot));
+        view.snapshot = Some(snapshot);
     }
 }
 
@@ -560,13 +596,18 @@ async fn supervise(
     mut stop: oneshot::Receiver<()>,
     view: SharedView,
     sudo: bool,
+    history: Option<crate::history::Sink>,
 ) {
     // Child::wait closes any stdin it owns. Keep the controller pipe here
     // so observing process exit does not itself request engine shutdown.
     let mut controller = child.stdin.take();
     let stdout = child.stdout.take().expect("stdout configured as a pipe");
     let stderr = child.stderr.take().expect("stderr configured as a pipe");
-    let mut reader = tokio::spawn(read_snapshots(BufReader::new(stdout), view.clone()));
+    let mut reader = tokio::spawn(read_snapshots(
+        BufReader::new(stdout),
+        view.clone(),
+        history,
+    ));
     let diagnostics = tokio::spawn(diagnostics(stderr));
     let mut read_complete = false;
     let result = tokio::select! {
@@ -638,13 +679,18 @@ async fn supervise_windows(
     mut capture: crate::windows_helper::Capture,
     mut stop: oneshot::Receiver<()>,
     view: SharedView,
+    history: Option<crate::history::Sink>,
 ) {
     let output = capture.output.take().expect("helper output configured");
     let stderr = capture
         .diagnostics
         .take()
         .expect("helper diagnostics configured");
-    let mut reader = tokio::spawn(read_snapshots(BufReader::new(output), view.clone()));
+    let mut reader = tokio::spawn(read_snapshots(
+        BufReader::new(output),
+        view.clone(),
+        history,
+    ));
     let mut diagnostics = tokio::spawn(diagnostics(stderr));
     let mut reader_done = false;
     let mut read_error = None;
@@ -717,6 +763,7 @@ async fn supervise_helper(
     mut capture: crate::macos::Capture,
     mut stop: oneshot::Receiver<()>,
     view: SharedView,
+    history: Option<crate::history::Sink>,
 ) {
     let output = capture.output.take().expect("helper output configured");
     let stderr = capture
@@ -724,7 +771,11 @@ async fn supervise_helper(
         .take()
         .expect("helper diagnostics configured");
     let exit = capture.exit.take().expect("helper exit pipe configured");
-    let mut reader = tokio::spawn(read_snapshots(BufReader::new(output), view.clone()));
+    let mut reader = tokio::spawn(read_snapshots(
+        BufReader::new(output),
+        view.clone(),
+        history,
+    ));
     let diagnostics = tokio::spawn(diagnostics(stderr));
     let mut reader_done = false;
     let mut error = tokio::select! {
@@ -813,7 +864,7 @@ mod tests {
             let (_sender, receiver) = oneshot::channel();
             tokio::time::timeout(
                 Duration::from_secs(3),
-                supervise_helper(capture, receiver, view.clone()),
+                supervise_helper(capture, receiver, view.clone(), None),
             )
             .await
             .unwrap();
@@ -921,6 +972,7 @@ mod tests {
         assert_eq!(snapshot.json.as_ptr(), allocation);
         let view = CaptureView {
             session: 7,
+            history: None,
             revision: 42,
             status: "stopping".into(),
             error: Some("error \"quoted\"\n🦀".into()),
@@ -1035,6 +1087,7 @@ mod tests {
         read_snapshots(
             BufReader::new(format!("{line}{line}").as_bytes()),
             view.clone(),
+            None,
         )
         .await
         .unwrap();
@@ -1052,11 +1105,66 @@ mod tests {
         let view = Arc::new(Mutex::new(CaptureView::default()));
         let bytes = vec![b'x'; MAX_RECORD_BYTES as usize + 2];
         assert!(
-            read_snapshots(BufReader::new(bytes.as_slice()), view.clone())
+            read_snapshots(BufReader::new(bytes.as_slice()), view.clone(), None)
                 .await
                 .is_err()
         );
         assert!(view.lock().unwrap().snapshot.is_none());
+    }
+
+    #[tokio::test]
+    async fn history_receives_snapshots_without_ui_polling_and_drains_on_stop() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = crate::history::Writer::start(dir.path().join("history.db"), "en0".into())
+            .await
+            .unwrap();
+        let status = writer.status.clone();
+        let view = Arc::new(Mutex::new(CaptureView::default()));
+        let frame = serde_json::json!({
+            "schema_version": 1, "type": "snapshot", "connections": [],
+            "timestamp": "2026-11-05T12:00:00Z",
+            "runtime": {"status": "running", "process_detection": {"degraded": false}},
+            "stats": {"packets_dropped": 0, "capture_packets_dropped": 0, "interface_packets_dropped": 0}
+        });
+        let input = format!("{frame}\n{frame}\n");
+        read_snapshots(
+            BufReader::new(input.as_bytes()),
+            view.clone(),
+            Some(writer.sink.clone()),
+        )
+        .await
+        .unwrap();
+        writer.finish().await;
+        let status = status.lock().unwrap();
+        assert_eq!(status.stored_snapshots, 2);
+        assert_eq!(status.dropped_snapshots, 0);
+        assert!(!status.active);
+        assert_eq!(status.error, None);
+        assert_eq!(view.lock().unwrap().revision, 2);
+    }
+
+    #[tokio::test]
+    async fn history_failure_does_not_fail_the_capture_reader() {
+        let dir = tempfile::tempdir().unwrap();
+        let writer = crate::history::Writer::start(dir.path().join("history.db"), "en0".into())
+            .await
+            .unwrap();
+        let status = writer.status.clone();
+        let view = Arc::new(Mutex::new(CaptureView::default()));
+        // A valid capture envelope without the metadata required by analytics.
+        let input = b"{\"schema_version\":1,\"type\":\"snapshot\",\"connections\":[],\"runtime\":{\"status\":\"running\"}}\n";
+        read_snapshots(
+            BufReader::new(input.as_slice()),
+            view.clone(),
+            Some(writer.sink.clone()),
+        )
+        .await
+        .unwrap();
+        writer.finish().await;
+        assert!(status.lock().unwrap().error.is_some());
+        let view = view.lock().unwrap();
+        assert_eq!(view.status, "running");
+        assert_eq!(view.error, None);
     }
 
     #[cfg(unix)]
@@ -1092,7 +1200,7 @@ mod tests {
             .unwrap();
         let view = Arc::new(Mutex::new(CaptureView::default()));
         let (sender, receiver) = oneshot::channel();
-        let mut task = tokio::spawn(supervise(child, receiver, view.clone(), false));
+        let mut task = tokio::spawn(supervise(child, receiver, view.clone(), false, None));
         tokio::time::timeout(Duration::from_secs(3), async {
             while view.lock().unwrap().revision == 0 {
                 tokio::time::sleep(Duration::from_millis(10)).await;
@@ -1139,7 +1247,7 @@ mod tests {
             .unwrap();
         let view = Arc::new(Mutex::new(CaptureView::default()));
         let (sender, receiver) = oneshot::channel();
-        let task = tokio::spawn(supervise(child, receiver, view.clone(), false));
+        let task = tokio::spawn(supervise(child, receiver, view.clone(), false, None));
         drop(sender);
         tokio::time::timeout(Duration::from_secs(3), task)
             .await
@@ -1167,7 +1275,7 @@ mod tests {
         let (_sender, receiver) = oneshot::channel();
         tokio::time::timeout(
             Duration::from_secs(3),
-            supervise(child, receiver, view.clone(), false),
+            supervise(child, receiver, view.clone(), false, None),
         )
         .await
         .unwrap();
