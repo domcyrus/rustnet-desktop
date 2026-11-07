@@ -8,7 +8,7 @@
 - シンボリックリンクを解決して同じディレクトリの実行ファイルを起動する単純な shell ランチャーで、ChatGPT などの Linux アプリアイコンを正しく取得。 (#39)
 
 ### 変更
-- エンジンを [RustNet #721](https://github.com/domcyrus/rustnet/pull/721) の `64fe320` に更新し、上流に含まれるパッチを削除。デスクトップ専用の Windows ヘルパーとネイティブアイコン連携は維持。 (#47)
+- エンジンを [RustNet #721](https://github.com/domcyrus/rustnet/pull/721) の `926e46e` に更新し、上流に含まれるパッチを削除。デスクトップ専用の Windows ヘルパーとネイティブアイコン連携は維持。 (#47)
 - エンジンと未統合の #719 を RustNet main の `e33cffc` にリベース。詳細メタデータ付きのエンジン差分出力を採用。差分再構築を検証し、表示固定・再開時の整合性を保持。最大 128 MiB のスナップショットに対応。 (#46)
 - PR と main の CI を Linux x64 のみに制限。macOS と Windows のチェックは安定版リリース時または手動で実行。 (#42)
 - 同梱エンジンを [#699](https://github.com/domcyrus/rustnet/pull/699) 統合後の RustNet main の `327a63f` に更新。デスクトップ統合パッチを更新し、上流の履歴接続 JSON キャッシュを再利用。 (#41)

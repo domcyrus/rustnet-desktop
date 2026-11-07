@@ -50,7 +50,7 @@ layout; capture controls require Tauri.
 ### Engine development and updates
 
 The bundled engine is pinned to [RustNet #721](https://github.com/domcyrus/rustnet/pull/721)
-at `64fe320`, which includes merged #719. Shared CLI features come directly from
+at `926e46e`, which includes merged #719. Shared CLI features come directly from
 that revision. The only remaining engine patch,
 `engine/patches/0003-windows-capture-helper.patch`, supplies the desktop-only Windows
 capture protocol and preopened recording/GeoIP handles. It stays in this repository;
@@ -452,7 +452,7 @@ and execute that protected copy; debug engine overrides are rejected. Recording
 files are created exclusively by the regular user. User GeoIP discovery is
 resolved by the app before descriptors cross the privilege boundary.
 
-The bundled engine uses schema 2 incremental output and full metadata from [RustNet #721](https://github.com/domcyrus/rustnet/pull/721) at `64fe320`, including merged #719. The engine emits full initial, periodic, and terminal snapshots, with complete changed connections and removals between them. Its delta baseline is limited to 10,000 records and 16 MiB of encoded JSON; larger captures fall back to full snapshots. Projection still scans the selected connections, so smaller output does not imply constant CPU use as history grows.
+The bundled engine uses schema 2 incremental output and full metadata from [RustNet #721](https://github.com/domcyrus/rustnet/pull/721) at `926e46e`, including merged #719. The engine emits full initial, periodic, and terminal snapshots, with complete changed connections and removals between them. Its delta baseline is limited to 10,000 records and 16 MiB of encoded JSON; larger captures fall back to full snapshots. Projection still scans the selected connections, so smaller output does not imply constant CPU use as history grows.
 
 The Rust bridge applies every delta before UI polling or saved-history delivery. It checks sequence continuity, IDs, and reconstructed counts, preserves raw metadata, and shares unchanged connection records. Missing or invalid updates keep the last good view visible with an error until a later full snapshot restores synchronization. Each new capture starts with a fresh baseline. Saved history receives complete snapshots and preserves sequence gaps.
 

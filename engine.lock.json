@@ -1,6 +1,6 @@
 {
   "repository": "https://github.com/domcyrus/rustnet.git",
-  "revision": "64fe320d41699e6d36351d8e40904639e2f6bb96",
+  "revision": "926e46e7476ea295ab97d58a6947fae5cff1b58b",
   "schemaVersion": 2,
   "patches": [
     {
