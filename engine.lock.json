@@ -1,23 +1,11 @@
 {
   "repository": "https://github.com/domcyrus/rustnet.git",
-  "revision": "e33cffc332df3c1cbf87360e21d93a05547b02ac",
+  "revision": "926e46e7476ea295ab97d58a6947fae5cff1b58b",
   "schemaVersion": 2,
   "patches": [
     {
-      "file": "engine/patches/0000-incremental-headless.patch",
-      "sha256": "14124377a5fd51847bc5684f59e90f6b19d8bae0b2677d0620c52643364574c6"
-    },
-    {
-      "file": "engine/patches/0001-desktop-integration.patch",
-      "sha256": "ddfbc2ba7606c6841be22246fcfff5fec08e5dfb6fe3771e3599e9eb86c1a944"
-    },
-    {
-      "file": "engine/patches/0002-windows-privilege-allowlist.patch",
-      "sha256": "b5f30ffc7a3f2aa91321828bb20db34bea3ea7c5792afc7bfc48dca2030636a4"
-    },
-    {
       "file": "engine/patches/0003-windows-capture-helper.patch",
-      "sha256": "55bd0b61c73ac1ac8adae0d6616f6981e308fa364d7d4c6bd602629f597e9557"
+      "sha256": "1d057064be9a923d53f277d779eb894765e00f03d35378c864b697bafec66582"
     }
   ]
 }

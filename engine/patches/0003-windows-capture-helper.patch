@@ -10,23 +10,6 @@ index f30d985..f628615 100644
      "Win32_System_JobObjects",
      "Win32_System_LibraryLoader",
      "Win32_System_SystemInformation",
-diff --git a/crates/rustnet-core/src/network/dns.rs b/crates/rustnet-core/src/network/dns.rs
-index 9cc348c..32bbb4b 100644
---- a/crates/rustnet-core/src/network/dns.rs
-+++ b/crates/rustnet-core/src/network/dns.rs
-@@ -464,6 +464,12 @@ impl DnsResolver {
-             let now = Instant::now();
-             if now >= deadline {
-                 report.timed_out = lifecycle.handles.len();
-+                for handle in &lifecycle.handles {
-+                    eprintln!(
-+                        "DNS worker did not stop before shutdown deadline: {}",
-+                        handle.thread().name().unwrap_or("unnamed")
-+                    );
-+                }
-                 lifecycle.handles.clear();
-                 break;
-             }
 diff --git a/crates/rustnet-core/src/network/geoip.rs b/crates/rustnet-core/src/network/geoip.rs
 index 7297a1e..196cf0d 100644
 --- a/crates/rustnet-core/src/network/geoip.rs
@@ -67,23 +50,6 @@ index 7297a1e..196cf0d 100644
      /// Create a new GeoIP resolver with the given configuration
      pub fn new(config: GeoIpConfig) -> Self {
          let country_reader = Self::open_reader(config.country_db_path.as_ref(), "Country");
-diff --git a/src/app/runtime.rs b/src/app/runtime.rs
-index 5936c7b..cf10514 100644
---- a/src/app/runtime.rs
-+++ b/src/app/runtime.rs
-@@ -282,6 +282,12 @@ impl RuntimeSupervisor {
-             let now = Instant::now();
-             if now >= deadline {
-                 report.timed_out_workers = workers.len();
-+                for worker in &workers {
-+                    eprintln!(
-+                        "Worker did not stop before shutdown deadline: {}",
-+                        worker.thread().name().unwrap_or("unnamed")
-+                    );
-+                }
-                 break;
-             }
- 
 diff --git a/src/app/state.rs b/src/app/state.rs
 index 9748986..af96af7 100644
 --- a/src/app/state.rs
@@ -101,7 +67,7 @@ index 9748986..af96af7 100644
      #[cfg(test)]
      pub(crate) fn new(config: Config) -> Result<Self> {
 diff --git a/src/bootstrap.rs b/src/bootstrap.rs
-index fdc38f8..bf3c2e1 100644
+index 5c3c451..36b2976 100644
 --- a/src/bootstrap.rs
 +++ b/src/bootstrap.rs
 @@ -15,6 +15,14 @@ use std::time::Duration;
