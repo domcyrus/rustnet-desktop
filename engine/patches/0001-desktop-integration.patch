@@ -1,5 +1,5 @@
 diff --git a/USAGE.ja.md b/USAGE.ja.md
-index 80fb303..c10b96f 100644
+index 5b36b01..2758cc6 100644
 --- a/USAGE.ja.md
 +++ b/USAGE.ja.md
 @@ -138,6 +138,17 @@ group_by_process = true
@@ -21,7 +21,7 @@ index 80fb303..c10b96f 100644
  
  変更のない履歴接続レコードの JSON エンコード結果を再利用します。キャッシュには最大
 diff --git a/USAGE.md b/USAGE.md
-index 4a43676..2711763 100644
+index 7836cdf..a00bcbb 100644
 --- a/USAGE.md
 +++ b/USAGE.md
 @@ -147,6 +147,16 @@ rustnet --headless --duration 60 --output json
@@ -42,7 +42,7 @@ index 4a43676..2711763 100644
  
  - **`--headless`**: disables terminal setup and reserves stdout for machine-readable records only. Diagnostics go to stderr or configured log files.
 diff --git a/USAGE.zh-CN.md b/USAGE.zh-CN.md
-index cf3fb34..d8e654c 100644
+index da8a643..c5d500c 100644
 --- a/USAGE.zh-CN.md
 +++ b/USAGE.zh-CN.md
 @@ -148,6 +148,14 @@ rustnet --headless --filter 'process:curl app:https'
@@ -1141,7 +1141,7 @@ index f936957..fdc38f8 100644
 +    }
 +}
 diff --git a/src/cli.rs b/src/cli.rs
-index 3fdaa5c..88933df 100644
+index e751f36..f689e8e 100644
 --- a/src/cli.rs
 +++ b/src/cli.rs
 @@ -57,6 +57,42 @@ pub fn build_cli() -> Command {
@@ -1728,10 +1728,10 @@ index 0000000..bee77ec
 +    }
 +}
 diff --git a/src/headless/mod.rs b/src/headless/mod.rs
-index 440c454..2cd4306 100644
+index 855ac49..c1e12ef 100644
 --- a/src/headless/mod.rs
 +++ b/src/headless/mod.rs
-@@ -71,6 +71,8 @@ impl std::str::FromStr for HeadlessFormat {
+@@ -80,6 +80,8 @@ impl std::str::FromStr for HeadlessFormat {
  /// Settings used by [`run`].
  #[derive(Debug, Clone, Default, PartialEq, Eq)]
  pub struct HeadlessOptions {
@@ -1740,7 +1740,7 @@ index 440c454..2cd4306 100644
      pub format: HeadlessFormat,
      /// Stop after this much wall-clock time. `None` waits for a shutdown
      /// signal in JSON mode. JSONL can also stop when its consumer closes the
-@@ -78,6 +80,8 @@ pub struct HeadlessOptions {
+@@ -87,6 +89,8 @@ pub struct HeadlessOptions {
      pub duration: Option<Duration>,
      /// Optional connection filter using the same syntax as the TUI.
      pub filter_query: Option<String>,
@@ -1749,15 +1749,15 @@ index 440c454..2cd4306 100644
  }
  
  /// Why a headless run ended.
-@@ -150,6 +154,7 @@ fn run_with_writer_deadline<W: Write + Send + 'static>(
+@@ -159,6 +163,7 @@ fn run_with_writer_deadline<W: Write + Send + 'static>(
      shutdown_requested: &AtomicBool,
      writer_deadline: Duration,
  ) -> Result<StopReport> {
 +    app.set_show_historic(options.include_historic);
      let mut cache = ConnectionCache::default();
-     let mut output =
-         match AsyncOutput::spawn_with_serializer(writer, move |value| cache.serialize(value)) {
-@@ -208,6 +213,7 @@ fn run_with_writer_deadline<W: Write + Send + 'static>(
+     let mut incremental = IncrementalEncoder::default();
+     let format = options.format;
+@@ -224,6 +229,7 @@ fn run_with_writer_deadline<W: Write + Send + 'static>(
          phase,
          termination_reason,
          Some(stop_report),
@@ -1765,7 +1765,7 @@ index 440c454..2cd4306 100644
      );
  
      let terminal_result = output.finish(snapshot, writer_deadline);
-@@ -249,8 +255,14 @@ fn stream_json_lines(
+@@ -265,8 +271,14 @@ fn stream_json_lines(
              } else {
                  RuntimePhase::Running
              };
@@ -1783,11 +1783,11 @@ index 440c454..2cd4306 100644
                  output.offer_latest(snapshot);
                  last_generation = Some(generation);
 diff --git a/src/headless/schema.rs b/src/headless/schema.rs
-index d68d53a..2b767dc 100644
+index 6b07ee3..90942de 100644
 --- a/src/headless/schema.rs
 +++ b/src/headless/schema.rs
-@@ -14,7 +14,7 @@ use crate::network::types::{AttributionSource, Connection, ConnectionKey};
- use super::{SCHEMA_VERSION, TerminationReason};
+@@ -16,7 +16,7 @@ use super::{SCHEMA_VERSION, TerminationReason};
+ pub(super) mod incremental;
  
  #[derive(Serialize)]
 -pub(super) struct SnapshotEnvelope<C = Vec<ConnectionSnapshot>> {
@@ -1795,7 +1795,27 @@ index d68d53a..2b767dc 100644
      schema_version: u8,
      #[serde(rename = "type")]
      record_type: &'static str,
-@@ -48,17 +48,47 @@ impl SnapshotEnvelope {
+@@ -29,8 +29,8 @@ pub(super) struct SnapshotEnvelope<C = Vec<ConnectionSnapshot>> {
+     connections: C,
+ }
+ 
+-impl SnapshotEnvelope {
+-    fn with_connections<C>(self, connections: C) -> SnapshotEnvelope<C> {
++impl<C> SnapshotEnvelope<C> {
++    fn with_connections<D>(self, connections: D) -> SnapshotEnvelope<D> {
+         SnapshotEnvelope {
+             schema_version: self.schema_version,
+             record_type: self.record_type,
+@@ -43,24 +43,56 @@ impl SnapshotEnvelope {
+             connections,
+         }
+     }
++}
+ 
++impl SnapshotEnvelope {
+     pub(super) fn new(
+         app: &App,
+         filter_query: Option<&str>,
          phase: RuntimePhase,
          termination_reason: Option<TerminationReason>,
          stop_report: Option<StopReport>,
@@ -1848,7 +1868,7 @@ index d68d53a..2b767dc 100644
  
          (
              generation,
-@@ -76,7 +106,7 @@ impl SnapshotEnvelope {
+@@ -78,7 +110,7 @@ impl SnapshotEnvelope {
                  sandbox: SandboxSnapshot::from_app(app),
                  stats: StatsSnapshot::from_stats(&app.get_stats()),
                  filter: filter.map(str::to_string),
@@ -1857,7 +1877,7 @@ index d68d53a..2b767dc 100644
                  connections,
              },
          )
-@@ -90,19 +120,20 @@ const MAX_CACHED_JSON_BYTES: usize = 16 * 1024 * 1024;
+@@ -92,19 +124,20 @@ const MAX_CACHED_JSON_BYTES: usize = 16 * 1024 * 1024;
  
  #[derive(Serialize)]
  #[serde(untagged)]
@@ -1883,7 +1903,7 @@ index d68d53a..2b767dc 100644
  }
  
  impl ConnectionCache {
-@@ -116,22 +147,61 @@ impl ConnectionCache {
+@@ -118,22 +151,61 @@ impl ConnectionCache {
          max_connections: usize,
          max_bytes: usize,
      ) -> anyhow::Result<Vec<u8>> {
@@ -1954,7 +1974,7 @@ index d68d53a..2b767dc 100644
                  encoded.push(EncodedConnection::Direct(Box::new(projected)));
                  continue;
              }
-@@ -139,13 +209,13 @@ impl ConnectionCache {
+@@ -141,13 +213,13 @@ impl ConnectionCache {
              // table and duplicating connection IDs for each emitted snapshot.
              while previous
                  .peek()
@@ -1970,7 +1990,7 @@ index d68d53a..2b767dc 100644
              {
                  previous.next()
              } else {
-@@ -167,9 +237,8 @@ impl ConnectionCache {
+@@ -169,9 +241,8 @@ impl ConnectionCache {
                  next.push(cached);
              }
          }
@@ -1981,7 +2001,7 @@ index d68d53a..2b767dc 100644
      }
  }
  
-@@ -307,6 +376,8 @@ impl SandboxSnapshot {
+@@ -309,6 +380,8 @@ impl SandboxSnapshot {
  
  #[derive(Serialize)]
  struct StatsSnapshot {
@@ -1990,7 +2010,7 @@ index d68d53a..2b767dc 100644
      packets_captured: u64,
      bytes_captured: u64,
      packets_processed: u64,
-@@ -334,6 +405,7 @@ impl StatsSnapshot {
+@@ -336,6 +409,7 @@ impl StatsSnapshot {
      fn from_stats(stats: &AppStats) -> Self {
          let load = |counter: &std::sync::atomic::AtomicU64| counter.load(Ordering::Relaxed);
          Self {
@@ -1998,7 +2018,7 @@ index d68d53a..2b767dc 100644
              packets_captured: load(&stats.packets_captured),
              bytes_captured: load(&stats.bytes_captured),
              packets_processed: load(&stats.packets_processed),
-@@ -359,8 +431,60 @@ impl StatsSnapshot {
+@@ -361,8 +435,60 @@ impl StatsSnapshot {
      }
  }
  
@@ -2060,7 +2080,7 @@ index d68d53a..2b767dc 100644
      id: String,
      protocol: &'static str,
      state: String,
-@@ -369,7 +493,7 @@ pub(super) struct ConnectionSnapshot {
+@@ -371,7 +497,7 @@ pub(super) struct ConnectionSnapshot {
      remote_is_gateway: bool,
      observed_vlan_ids: Vec<u16>,
      direction: Option<&'static str>,
@@ -2069,7 +2089,7 @@ index d68d53a..2b767dc 100644
      service: Option<String>,
      application: Option<&'static str>,
      hostname: Option<String>,
-@@ -385,8 +509,50 @@ pub(super) struct ConnectionSnapshot {
+@@ -387,8 +513,50 @@ pub(super) struct ConnectionSnapshot {
      closed_at: Option<String>,
  }
  
@@ -2120,7 +2140,7 @@ index d68d53a..2b767dc 100644
          let authoritative_hostname = connection.authoritative_hostname();
          let (hostname, hostname_source) = if let Some(hostname) = authoritative_hostname {
              (Some(hostname.to_string()), Some("application"))
-@@ -486,7 +652,7 @@ impl ConnectionSnapshot {
+@@ -488,7 +656,7 @@ impl ConnectionSnapshot {
              direction: connection
                  .connection_direction
                  .map(|outgoing| if outgoing { "outbound" } else { "inbound" }),
@@ -2129,7 +2149,7 @@ index d68d53a..2b767dc 100644
              service: connection.service_name.clone(),
              application: connection
                  .dpi_info
-@@ -537,6 +703,113 @@ impl ConnectionSnapshot {
+@@ -539,6 +707,113 @@ impl ConnectionSnapshot {
      }
  }
  
@@ -2243,7 +2263,7 @@ index d68d53a..2b767dc 100644
  #[derive(PartialEq, Serialize)]
  struct EndpointSnapshot {
      ip: String,
-@@ -545,7 +818,14 @@ struct EndpointSnapshot {
+@@ -547,7 +822,14 @@ struct EndpointSnapshot {
  }
  
  #[derive(PartialEq, Serialize)]
@@ -2259,7 +2279,7 @@ index d68d53a..2b767dc 100644
      pid: Option<u32>,
      ppid: Option<u32>,
      name: Option<String>,
-@@ -669,6 +949,83 @@ mod tests {
+@@ -671,6 +953,83 @@ mod tests {
      };
      use crate::network::types::{Protocol, ProtocolState, TcpState};
  
@@ -2343,7 +2363,7 @@ index d68d53a..2b767dc 100644
      #[test]
      fn capture_totals_survive_stats_snapshot_and_reset_in_wire_output() {
          let stats = AppStats::default();
-@@ -730,7 +1087,8 @@ mod tests {
+@@ -732,7 +1091,8 @@ mod tests {
      #[test]
      fn version_one_schema_keys_and_protocol_timings_are_stable() {
          let app = app_with_connections();
@@ -2353,7 +2373,7 @@ index d68d53a..2b767dc 100644
          let value = serde_json::to_value(snapshot).unwrap();
  
          assert_eq!(
-@@ -995,6 +1353,32 @@ mod tests {
+@@ -997,6 +1357,32 @@ mod tests {
          assert_eq!(live["remote"], reused["remote"]);
      }
  
@@ -2386,7 +2406,7 @@ index d68d53a..2b767dc 100644
      #[test]
      fn traffic_rates_serialize_explicit_byte_units() {
          let mut connection = Connection::new(
-@@ -1034,6 +1418,7 @@ mod tests {
+@@ -1036,6 +1422,7 @@ mod tests {
                  RuntimePhase::after_stop(report, true),
                  Some(failure.kind.termination_reason()),
                  Some(report),
@@ -2394,7 +2414,7 @@ index d68d53a..2b767dc 100644
              );
              let value = serde_json::to_value(snapshot).unwrap();
              assert_eq!(value["runtime"]["status"], "stopping");
-@@ -1064,7 +1449,7 @@ mod tests {
+@@ -1066,7 +1453,7 @@ mod tests {
      fn whitespace_only_filter_serializes_as_null() {
          let app = app_with_connections();
          let (_, snapshot) =
@@ -2404,7 +2424,7 @@ index d68d53a..2b767dc 100644
  
          assert!(value["filter"].is_null());
 diff --git a/src/headless/schema/cache_tests.rs b/src/headless/schema/cache_tests.rs
-index 62d1bf9..e40e280 100644
+index 55f7a51..ddb1cb4 100644
 --- a/src/headless/schema/cache_tests.rs
 +++ b/src/headless/schema/cache_tests.rs
 @@ -3,9 +3,10 @@ use crate::headless::output::serialize_record;
@@ -2564,29 +2584,28 @@ index 62d1bf9..e40e280 100644
          assert_matches_uncached(&mut cache, record);
      }
  }
-@@ -188,7 +200,7 @@ fn benchmark_history_encoding() {
+@@ -200,7 +212,8 @@ fn benchmark_history_encoding() {
          app.set_connections_snapshot_for_test(connections);
          let mut cache = ConnectionCache::default();
-         cache
--            .serialize(SnapshotEnvelope::new(&app, None, RuntimePhase::Running, None, None).1)
-+            .serialize(SnapshotEnvelope::new(&app, None, RuntimePhase::Running, None, None, true).1)
-             .unwrap();
-         let mut uncached_time = Duration::ZERO;
-         let mut cached_time = Duration::ZERO;
-@@ -202,8 +214,9 @@ fn benchmark_history_encoding() {
-             } {
+         let mut incremental = IncrementalEncoder::default();
+-        let snapshot = || SnapshotEnvelope::new(&app, None, RuntimePhase::Running, None, None).1;
++        let snapshot =
++            || SnapshotEnvelope::new(&app, None, RuntimePhase::Running, None, None, true).1;
+         cache.serialize(snapshot()).unwrap();
+         incremental.serialize(snapshot()).unwrap();
+         let mut projection_time = [Duration::ZERO; 3];
+@@ -212,7 +225,8 @@ fn benchmark_history_encoding() {
+                 let mode = (iteration + offset) % 3;
                  let started = Instant::now();
-                 let mut record =
--                    SnapshotEnvelope::new(&app, None, RuntimePhase::Running, None, None).1;
+                 let mut record = snapshot();
 -                for connection in &mut record.connections {
-+                    SnapshotEnvelope::new(&app, None, RuntimePhase::Running, None, None, true).1;
 +                for connection in record.connections.full_mut() {
 +                    let connection = &mut connection.connection;
                      if !connection.historic {
                          connection.traffic.bytes_sent += iteration as u64 + 1;
                          connection.traffic.outgoing_bytes_per_second =
-@@ -231,3 +244,73 @@ fn benchmark_history_encoding() {
-         );
+@@ -245,3 +259,73 @@ fn benchmark_history_encoding() {
+         }
      }
  }
 +
@@ -2659,8 +2678,232 @@ index 62d1bf9..e40e280 100644
 +        assert_eq!(cache.full.entries.len(), if full { 2 } else { 0 });
 +    }
 +}
+diff --git a/src/headless/schema/incremental.rs b/src/headless/schema/incremental.rs
+index 04ddfaf..6eccdf8 100644
+--- a/src/headless/schema/incremental.rs
++++ b/src/headless/schema/incremental.rs
+@@ -18,10 +18,27 @@ struct IncrementalRecord<C> {
+     snapshot: SnapshotEnvelope<C>,
+ }
+ 
++// Keep the complete basic or full projection in the baseline so late detail
++// enrichment invalidates a record even when traffic counters do not change.
++#[derive(PartialEq, Serialize)]
++#[serde(untagged)]
++enum IncrementalConnection {
++    Basic(Box<ConnectionSnapshot>),
++    Full(Box<FullConnectionSnapshot>),
++}
++impl IncrementalConnection {
++    fn id(&self) -> &str {
++        match self {
++            Self::Basic(record) => record.id(),
++            Self::Full(record) => record.id(),
++        }
++    }
++}
++
+ #[derive(Default)]
+ pub(in crate::headless) struct IncrementalEncoder {
+     // None means no complete baseline is retained. An empty baseline is valid.
+-    previous: Option<Vec<CachedConnection>>,
++    previous: Option<Vec<CachedConnection<IncrementalConnection>>>,
+     sequence: u64,
+     last_full: Option<(u64, Instant)>,
+ }
+@@ -46,6 +63,20 @@ impl IncrementalEncoder {
+         max_connections: usize,
+         max_bytes: usize,
+     ) -> anyhow::Result<Vec<u8>> {
++        let records = match std::mem::replace(
++            &mut snapshot.connections,
++            ConnectionSnapshots::Basic(Vec::new()),
++        ) {
++            ConnectionSnapshots::Basic(records) => records
++                .into_iter()
++                .map(|record| IncrementalConnection::Basic(Box::new(record)))
++                .collect::<Vec<_>>(),
++            ConnectionSnapshots::Full(records) => records
++                .into_iter()
++                .map(|record| IncrementalConnection::Full(Box::new(record)))
++                .collect::<Vec<_>>(),
++        };
++        let mut snapshot = snapshot.with_connections(records);
+         let sequence = self
+             .sequence
+             .checked_add(1)
+@@ -72,13 +103,13 @@ impl IncrementalEncoder {
+             // merge. Compare every exported field, including late enrichment.
+             while previous
+                 .peek()
+-                .is_some_and(|entry| entry.projected.id < projected.id)
++                .is_some_and(|entry| entry.projected.id() < projected.id())
+             {
+-                removed.push(previous.next().unwrap().projected.id.clone());
++                removed.push(previous.next().unwrap().projected.id().to_owned());
+             }
+             let matching = if previous
+                 .peek()
+-                .is_some_and(|entry| entry.projected.id == projected.id)
++                .is_some_and(|entry| entry.projected.id() == projected.id())
+             {
+                 previous.next()
+             } else {
+@@ -101,7 +132,7 @@ impl IncrementalEncoder {
+             encoded.push(json);
+         }
+         if !full {
+-            removed.extend(previous.map(|entry| entry.projected.id.clone()));
++            removed.extend(previous.map(|entry| entry.projected.id().to_owned()));
+             snapshot.record_type = "delta";
+         } else {
+             removed.clear();
+@@ -131,7 +162,7 @@ impl IncrementalEncoder {
+ 
+     fn full_without_baseline(
+         &mut self,
+-        snapshot: SnapshotEnvelope,
++        snapshot: SnapshotEnvelope<Vec<IncrementalConnection>>,
+         sequence: u64,
+         now: Instant,
+     ) -> anyhow::Result<Vec<u8>> {
+diff --git a/src/headless/schema/incremental/tests.rs b/src/headless/schema/incremental/tests.rs
+index 351ae0a..10d0d8f 100644
+--- a/src/headless/schema/incremental/tests.rs
++++ b/src/headless/schema/incremental/tests.rs
+@@ -60,7 +60,7 @@ impl Consumer {
+ }
+ 
+ fn snapshot(app: &App) -> SnapshotEnvelope {
+-    SnapshotEnvelope::new(app, None, RuntimePhase::Running, None, None).1
++    SnapshotEnvelope::new(app, None, RuntimePhase::Running, None, None, false).1
+ }
+ 
+ fn assert_reconstructs(
+@@ -100,14 +100,18 @@ fn reconstructs_updates_archival_late_metadata_eviction_and_tuple_reuse() {
+         record.stats.packets_captured += iteration;
+         record.stats.bytes_captured += iteration * 100;
+         if iteration > 5 {
+-            record.connections[0].historic = true;
+-            record.connections[0].closed_at = Some("2026-01-01T00:00:00Z".into());
+-            record.connections[0].traffic.bytes_received = 500;
++            record.connections.basic_mut()[0].historic = true;
++            record.connections.basic_mut()[0].closed_at = Some("2026-01-01T00:00:00Z".into());
++            record.connections.basic_mut()[0].traffic.bytes_received = 500;
+         }
+         if iteration > 10 {
+-            record.connections[0].hostname = Some("late.example".into());
+-            record.connections[0].process.as_mut().unwrap().name = Some("late process".into());
+-            record.connections[0].geoip = Some(GeoIpSnapshot {
++            record.connections.basic_mut()[0].hostname = Some("late.example".into());
++            record.connections.basic_mut()[0]
++                .process
++                .as_mut()
++                .unwrap()
++                .name = Some("late process".into());
++            record.connections.basic_mut()[0].geoip = Some(GeoIpSnapshot {
+                 country_code: Some("CH".into()),
+                 country_name: None,
+                 asn: Some(64512),
+@@ -116,20 +120,23 @@ fn reconstructs_updates_archival_late_metadata_eviction_and_tuple_reuse() {
+                 postal_code: None,
+             });
+         }
+-        record.connections[1].traffic.bytes_sent += iteration;
+-        record.connections[1].traffic.outgoing_bytes_per_second =
+-            finite(if iteration % 2 == 0 { 0.0 } else { -0.0 });
++        record.connections.basic_mut()[1].traffic.bytes_sent += iteration;
++        record.connections.basic_mut()[1]
++            .traffic
++            .outgoing_bytes_per_second = finite(if iteration % 2 == 0 { 0.0 } else { -0.0 });
+         if iteration > 20 {
+-            record.connections[1].id.push_str("-new-lifetime");
++            record.connections.basic_mut()[1]
++                .id
++                .push_str("-new-lifetime");
+         }
+         if iteration > 25 {
+-            record.connections.remove(0);
++            record.connections.basic_mut().remove(0);
+             record.filter = Some("process:resolver".into());
+         }
+         if iteration > 40 {
+-            record.connections.clear();
++            record.connections.basic_mut().clear();
+         }
+-        record.connection_count = record.connections.len();
++        record.connection_count = record.connections.basic_mut().len();
+         assert_reconstructs(&mut encoder, &mut consumer, record, now);
+     }
+ }
+@@ -186,9 +193,10 @@ fn full_snapshots_are_periodic_and_terminal_is_self_contained() {
+         RuntimePhase::StoppedWithErrors,
+         Some(TerminationReason::RuntimeFailed),
+         Some(StopReport::default()),
++        false,
+     )
+     .1;
+-    terminal.connections[0].traffic.bytes_received += 77;
++    terminal.connections.basic_mut()[0].traffic.bytes_received += 77;
+     terminal.stats.bytes_captured += 77;
+     let expected = serde_json::to_value(&terminal).unwrap();
+     let record = assert_reconstructs(&mut encoder, &mut consumer, terminal, now);
+@@ -223,3 +231,53 @@ fn limits_fall_back_to_complete_snapshots_and_resume_deltas_when_state_fits() {
+         assert_eq!(delta["type"], "delta");
+     }
+ }
++
++impl ConnectionSnapshots {
++    fn basic_mut(&mut self) -> &mut Vec<ConnectionSnapshot> {
++        match self {
++            Self::Basic(records) => records,
++            Self::Full(_) => panic!("expected basic records"),
++        }
++    }
++}
++
++#[test]
++fn full_metadata_and_detail_mode_changes_reconstruct_exactly() {
++    let app = app_with_connections();
++    let now = Instant::now();
++    let mut encoder = IncrementalEncoder::default();
++    let mut consumer = Consumer::default();
++    assert_reconstructs(&mut encoder, &mut consumer, snapshot(&app), now);
++    for iteration in 0..4 {
++        let mut full = SnapshotEnvelope::new(&app, None, RuntimePhase::Running, None, None, true).1;
++        let ConnectionSnapshots::Full(records) = &mut full.connections else {
++            unreachable!()
++        };
++        let record = &mut records[0];
++        record.connection.historic = true;
++        record.connection.process.as_mut().unwrap().user_group =
++            Some(format!("user-{iteration}:group"));
++        record.details.network_context.remote_hostname = Some(format!("late-{iteration}.example"));
++        record.details.request_health.retries = Some(iteration);
++        full.stats.capture_accounting = Some(crate::app::CaptureAccounting {
++            captured: 42 + iteration,
++            ..Default::default()
++        });
++        let wire = assert_reconstructs(&mut encoder, &mut consumer, full, now);
++        assert!(!wire["connections"].as_array().unwrap().is_empty());
++    }
++    assert_reconstructs(&mut encoder, &mut consumer, snapshot(&app), now);
++    let mut full = SnapshotEnvelope::new(
++        &app,
++        None,
++        RuntimePhase::Stopped,
++        Some(TerminationReason::DurationElapsed),
++        Some(StopReport::default()),
++        true,
++    )
++    .1;
++    full.stats.capture_accounting = Some(crate::app::CaptureAccounting::default());
++    let expected = serde_json::to_value(&full).unwrap();
++    let wire = assert_reconstructs(&mut encoder, &mut consumer, full, now);
++    assert_eq!(Consumer::default().apply(&wire).unwrap(), expected);
++}
 diff --git a/src/headless/tests.rs b/src/headless/tests.rs
-index aa1708a..90b0dbc 100644
+index 847ba16..533f2a8 100644
 --- a/src/headless/tests.rs
 +++ b/src/headless/tests.rs
 @@ -7,6 +7,7 @@ use serde::{Serialize, Serializer};
@@ -2671,7 +2914,7 @@ index aa1708a..90b0dbc 100644
  
  #[derive(Clone, Default)]
  struct SharedWriter(Arc<Mutex<Vec<u8>>>);
-@@ -95,6 +96,123 @@ pub(super) fn object_keys(value: &Value) -> Vec<&str> {
+@@ -95,6 +96,131 @@ pub(super) fn object_keys(value: &Value) -> Vec<&str> {
      keys
  }
  
@@ -2679,7 +2922,11 @@ index aa1708a..90b0dbc 100644
 +fn extended_output_is_independent_and_applies_to_live_and_terminal_records() {
 +    for full_details in [false, true] {
 +        for capture_accounting in [false, true] {
-+            for format in [HeadlessFormat::Json, HeadlessFormat::JsonLines] {
++            for format in [
++                HeadlessFormat::Json,
++                HeadlessFormat::JsonLines,
++                HeadlessFormat::JsonLinesDelta,
++            ] {
 +                let mut app = App::new(Config {
 +                    capture_accounting,
 +                    resolve_dns: false,
@@ -2755,7 +3002,11 @@ index aa1708a..90b0dbc 100644
 +#[test]
 +fn retained_history_is_exported_only_when_requested() {
 +    for include_historic in [false, true] {
-+        for format in [HeadlessFormat::Json, HeadlessFormat::JsonLines] {
++        for format in [
++            HeadlessFormat::Json,
++            HeadlessFormat::JsonLines,
++            HeadlessFormat::JsonLinesDelta,
++        ] {
 +            let mut app = app_with_connections();
 +            app.cleanup_connections_for_test(SystemTime::now() + Duration::from_secs(86400));
 +            let output = SharedWriter::default();
@@ -2795,7 +3046,7 @@ index aa1708a..90b0dbc 100644
  #[test]
  fn json_writes_one_final_versioned_snapshot() {
      let mut app = app_with_connections();
-@@ -103,6 +221,8 @@ fn json_writes_one_final_versioned_snapshot() {
+@@ -103,6 +229,8 @@ fn json_writes_one_final_versioned_snapshot() {
          &mut app,
          output.clone(),
          &HeadlessOptions {
@@ -2804,16 +3055,50 @@ index aa1708a..90b0dbc 100644
              format: HeadlessFormat::Json,
              duration: Some(Duration::ZERO),
              filter_query: None,
-@@ -142,6 +262,8 @@ fn jsonl_emits_an_initial_snapshot_and_applies_filter() {
-         &mut app,
-         output.clone(),
-         &HeadlessOptions {
-+            full_details: false,
-+            include_historic: false,
-             format: HeadlessFormat::JsonLines,
-             duration: Some(Duration::ZERO),
-             filter_query: Some("proto:tcp".to_string()),
-@@ -611,6 +733,8 @@ fn capture_failure_stops_an_indefinite_run() {
+@@ -146,6 +274,7 @@ fn jsonl_emits_an_initial_snapshot_and_applies_filter() {
+                 format,
+                 duration: Some(Duration::ZERO),
+                 filter_query: Some("proto:tcp".to_string()),
++                ..HeadlessOptions::default()
+             },
+             &AtomicBool::new(false),
+         )
+@@ -390,7 +519,7 @@ fn superseded_snapshots_are_dropped_without_serialization_and_terminal_is_writte
+ #[test]
+ fn incremental_baseline_tracks_written_records_after_queue_replacement() {
+     let app = app_with_connections();
+-    let snapshot = || SnapshotEnvelope::new(&app, None, RuntimePhase::Running, None, None).1;
++    let snapshot = || SnapshotEnvelope::new(&app, None, RuntimePhase::Running, None, None, true).1;
+     let expected = serde_json::to_value(snapshot()).unwrap();
+     let (writer, output, entered, release, finished) = stalled_writer();
+     let mut encoder = IncrementalEncoder::default();
+@@ -405,8 +534,15 @@ fn incremental_baseline_tracks_written_records_after_queue_replacement() {
+     entered.recv_timeout(Duration::from_secs(1)).unwrap();
+     encoded_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+     for _ in 0..20 {
+-        let filtered =
+-            SnapshotEnvelope::new(&app, Some("proto:tcp"), RuntimePhase::Running, None, None).1;
++        let filtered = SnapshotEnvelope::new(
++            &app,
++            Some("proto:tcp"),
++            RuntimePhase::Running,
++            None,
++            None,
++            true,
++        )
++        .1;
+         sink.offer_latest(filtered);
+     }
+     // Every filtered snapshot is superseded while the first write is blocked.
+@@ -420,6 +556,7 @@ fn incremental_baseline_tracks_written_records_after_queue_replacement() {
+         RuntimePhase::Stopped,
+         Some(TerminationReason::DurationElapsed),
+         Some(StopReport::default()),
++        true,
+     )
+     .1;
+     sink.finish(terminal, Duration::from_secs(1)).unwrap();
+@@ -677,6 +814,8 @@ fn capture_failure_stops_an_indefinite_run() {
          &mut app,
          output.clone(),
          &HeadlessOptions {
@@ -2822,7 +3107,7 @@ index aa1708a..90b0dbc 100644
              format: HeadlessFormat::Json,
              ..HeadlessOptions::default()
          },
-@@ -641,6 +765,8 @@ fn capture_failure_wins_a_simultaneous_normal_exit() {
+@@ -711,6 +850,8 @@ fn capture_failure_wins_a_simultaneous_normal_exit() {
              &mut app,
              output.clone(),
              &HeadlessOptions {
@@ -2831,7 +3116,7 @@ index aa1708a..90b0dbc 100644
                  format,
                  duration: Some(Duration::ZERO),
                  filter_query: None,
-@@ -673,6 +799,8 @@ fn unexpected_critical_worker_exit_stops_an_indefinite_run() {
+@@ -743,6 +884,8 @@ fn unexpected_critical_worker_exit_stops_an_indefinite_run() {
          &mut app,
          output.clone(),
          &HeadlessOptions {
@@ -2840,7 +3125,7 @@ index aa1708a..90b0dbc 100644
              format: HeadlessFormat::Json,
              ..HeadlessOptions::default()
          },
-@@ -695,6 +823,8 @@ fn shared_shutdown_condition_ends_json_mode() {
+@@ -765,6 +908,8 @@ fn shared_shutdown_condition_ends_json_mode() {
          &mut app,
          output.clone(),
          &HeadlessOptions {

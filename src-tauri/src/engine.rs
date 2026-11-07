@@ -5,7 +5,9 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, value::RawValue};
+use serde_json::Value;
+#[cfg(test)]
+use serde_json::value::RawValue;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncRead, AsyncReadExt, BufReader};
 #[cfg(not(windows))]
 use tokio::process::Child;
@@ -13,7 +15,11 @@ use tokio::process::Command;
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
-const MAX_RECORD_BYTES: u64 = 16 * 1024 * 1024;
+mod stream;
+pub(crate) use stream::Snapshot;
+use stream::{Decoder, MAX_RECORD_BYTES, STALE_ERROR, Update};
+#[cfg(test)]
+use stream::{decode_snapshot, validate_snapshot};
 const MAX_DIAGNOSTIC_BYTES: usize = 16 * 1024;
 #[cfg(not(windows))]
 const STOP_TIMEOUT: Duration = Duration::from_secs(15);
@@ -31,13 +37,6 @@ pub struct CaptureView {
     pub history: Option<crate::history::Status>,
 }
 
-// Keep the validated wire document intact instead of allocating a JSON tree.
-pub struct Snapshot {
-    pub(crate) json: String,
-    status: String,
-    error: Option<String>,
-}
-
 // Send already validated JSON through Tauri's public response API. Serializing
 // Snapshot through RawValue would require validating the entire document again
 // just to construct an owned RawValue.
@@ -49,14 +48,14 @@ impl tauri::ipc::IpcResponse for CaptureResponse {
             return Ok("null".to_owned().into());
         };
         // Serde escapes every metadata string. Only the snapshot, validated in
-        // full by decode_snapshot, is appended verbatim as an object.
+        // full by the stream decoder, is appended verbatim as an object.
         let mut json = serde_json::to_string(&view.cursor())?;
         json.pop(); // CaptureCursor always serializes as an object.
         json.push_str(",\"snapshot\":");
         json.push_str(
             view.snapshot
                 .as_ref()
-                .map_or("null", |snapshot| &snapshot.json),
+                .map_or("null", |snapshot| snapshot.json()),
         );
         json.push('}');
         Ok(json.into())
@@ -324,7 +323,7 @@ async fn launch_local(
     command.args([
         "--headless",
         "--output",
-        "jsonl",
+        "jsonl-delta",
         "--headless-details",
         "full",
         "--capture-accounting",
@@ -484,47 +483,6 @@ async fn diagnostics(mut reader: impl AsyncRead + Unpin) -> String {
     String::from_utf8_lossy(&tail).trim().to_string()
 }
 
-fn decode_snapshot(bytes: Vec<u8>) -> Result<Snapshot, String> {
-    let json = String::from_utf8(bytes).map_err(|e| format!("Invalid capture snapshot: {e}"))?;
-    let (status, error) = validate_snapshot(&json)?;
-    Ok(Snapshot {
-        json,
-        status,
-        error,
-    })
-}
-
-fn validate_snapshot(json: &str) -> Result<(String, Option<String>), String> {
-    if !json.trim_start().starts_with('{') {
-        return Err("Invalid capture snapshot: expected a JSON object".into());
-    }
-    #[derive(Deserialize)]
-    struct Header<'a> {
-        schema_version: u64,
-        #[serde(rename = "type")]
-        kind: String,
-        #[serde(borrow)]
-        connections: &'a RawValue,
-        runtime: Runtime,
-    }
-    #[derive(Deserialize)]
-    struct Runtime {
-        status: String,
-        capture_error: Option<String>,
-    }
-    let value: Header<'_> =
-        serde_json::from_str(json).map_err(|e| format!("Invalid capture snapshot: {e}"))?;
-    if value.schema_version != 1
-        || value.kind != "snapshot"
-        || !value.connections.get().starts_with('[')
-    {
-        return Err(
-            "Unsupported capture schema. Rebuild the desktop's bundled RustNet engine.".into(),
-        );
-    }
-    Ok((value.runtime.status, value.runtime.capture_error))
-}
-
 async fn read_snapshots(
     mut reader: impl AsyncBufRead + Unpin,
     view: SharedView,
@@ -532,6 +490,7 @@ async fn read_snapshots(
 ) -> Result<(), String> {
     let mut line = Vec::new();
     let mut sequence = 0;
+    let mut decoder = Decoder::default();
     loop {
         line.clear();
         let count = (&mut reader)
@@ -540,26 +499,39 @@ async fn read_snapshots(
             .await
             .map_err(|e| e.to_string())?;
         if count == 0 {
-            return Ok(());
+            return if decoder.stale {
+                Err("Capture stream ended before a full snapshot restored synchronization".into())
+            } else {
+                Ok(())
+            };
         }
         if count as u64 > MAX_RECORD_BYTES {
-            return Err("Capture snapshot exceeded 16 MiB".into());
+            return Err(
+                "Capture record exceeds 128 MiB. Reduce retained history or capture scope.".into(),
+            );
         }
-        // Transfer the record into the snapshot without another JSON scan or
-        // byte copy. Reserve the next read buffer at the observed record size.
+        // Retain only one input buffer; every delta is reconstructed before
+        // publishing a view or submitting a complete snapshot to history.
         let bytes = std::mem::replace(&mut line, Vec::with_capacity(count));
-        let snapshot = Arc::new(decode_snapshot(bytes)?);
         sequence += 1;
+        let snapshot = match decoder.push(bytes)? {
+            Update::Snapshot(snapshot) => Arc::new(snapshot),
+            Update::Stale => {
+                let mut view = view.lock().unwrap_or_else(|e| e.into_inner());
+                view.error = Some(STALE_ERROR.into());
+                continue;
+            }
+        };
         if let Some(history) = &history {
-            history.submit(sequence, snapshot.clone());
+            history.submit(snapshot.sequence.unwrap_or(sequence), snapshot.clone());
         }
         let mut view = view.lock().unwrap_or_else(|e| e.into_inner());
         // A late running snapshot cannot undo an explicit stop request.
         if view.status != "stopping" {
             view.status = snapshot.status.clone();
         }
-        if let Some(error) = &snapshot.error {
-            view.error = Some(error.clone());
+        if snapshot.error.is_some() || view.error.as_deref() == Some(STALE_ERROR) {
+            view.error = snapshot.error.clone();
         }
         view.revision += 1;
         view.snapshot = Some(snapshot);
@@ -932,7 +904,7 @@ mod tests {
         }
         let line = r#"{"schema_version":1,"type":"snapshot","connections":[{"future":{"text":"hello 🦀","counter":18446744073709551615}}],"runtime":{"status":"running","capture_error":null},"additive":[true,null]}"#;
         let snapshot = Arc::new(decode_snapshot(line.as_bytes().to_vec()).unwrap());
-        assert_eq!(snapshot.json, line);
+        assert_eq!(snapshot.json(), line);
         let view = CaptureView {
             snapshot: Some(snapshot.clone()),
             ..CaptureView::default()
@@ -969,7 +941,7 @@ mod tests {
         let bytes = line.as_bytes().to_vec();
         let allocation = bytes.as_ptr();
         let snapshot = Arc::new(decode_snapshot(bytes).unwrap());
-        assert_eq!(snapshot.json.as_ptr(), allocation);
+        assert_eq!(snapshot.json().as_ptr(), allocation);
         let view = CaptureView {
             session: 7,
             history: None,
@@ -1095,9 +1067,158 @@ mod tests {
         assert_eq!(view.revision, 2);
         assert_eq!(view.status, "stopping");
         assert_eq!(
-            serde_json::from_str::<Value>(&view.snapshot.as_ref().unwrap().json).unwrap()["connections"],
+            serde_json::from_str::<Value>(view.snapshot.as_ref().unwrap().json()).unwrap()["connections"],
             serde_json::json!([])
         );
+    }
+
+    #[tokio::test]
+    async fn delta_stream_keeps_frozen_views_stable_and_resumes_with_every_update() {
+        use tokio::io::AsyncWriteExt;
+        let view = Arc::new(Mutex::new(CaptureView::default()));
+        let (mut writer, reader) = tokio::io::duplex(8192);
+        let task = tokio::spawn(read_snapshots(BufReader::new(reader), view.clone(), None));
+        async fn send(
+            writer: &mut tokio::io::DuplexStream,
+            view: &SharedView,
+            (seq, full, connections, removed, count, revision): (
+                u64,
+                bool,
+                Value,
+                Value,
+                usize,
+                u64,
+            ),
+        ) {
+            let record = serde_json::json!({"schema_version":2,"type":if full {"snapshot"} else {"delta"},"sequence":seq,"base_sequence":if full {None} else {Some(seq-1)},"removed_connection_ids":removed,"connections":connections,"connection_count":count,"timestamp":"2026-11-06T00:00:00Z","runtime":{"status":"running"},"stats":{},"sandbox":{},"filter":null});
+            writer
+                .write_all(format!("{record}\n").as_bytes())
+                .await
+                .unwrap();
+            tokio::time::timeout(Duration::from_secs(3), async {
+                while view.lock().unwrap().revision < revision {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+        send(
+            &mut writer,
+            &view,
+            (
+                1,
+                true,
+                serde_json::json!([{"id":"a","metadata":"first"}]),
+                serde_json::json!([]),
+                1,
+                1,
+            ),
+        )
+        .await;
+        let frozen = view.lock().unwrap().update(None, true).unwrap();
+        let frozen_json = frozen.snapshot.as_ref().unwrap().json().to_owned();
+        send(
+            &mut writer,
+            &view,
+            (
+                2,
+                false,
+                serde_json::json!([{"id":"b","metadata":"second"}]),
+                serde_json::json!([]),
+                2,
+                2,
+            ),
+        )
+        .await;
+        let status = view.lock().unwrap().update(Some(&frozen.cursor()), false);
+        assert!(status.is_none());
+        send(
+            &mut writer,
+            &view,
+            (
+                3,
+                false,
+                serde_json::json!([{"id":"b","metadata":"late"}]),
+                serde_json::json!(["a"]),
+                1,
+                3,
+            ),
+        )
+        .await;
+        let resumed = view.lock().unwrap().update(None, true).unwrap();
+        let snapshot: Value =
+            serde_json::from_str(resumed.snapshot.as_ref().unwrap().json()).unwrap();
+        assert_eq!(
+            snapshot["connections"],
+            serde_json::json!([{"id":"b","metadata":"late"}])
+        );
+        assert_eq!(frozen.snapshot.as_ref().unwrap().json(), frozen_json);
+        // A bad batch is observable to status-only polling, without publishing
+        // a partial snapshot. A later full record clears that error.
+        writer.write_all(b"{invalid}\n").await.unwrap();
+        tokio::time::timeout(Duration::from_secs(3), async {
+            while view.lock().unwrap().error.is_none() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(view.lock().unwrap().revision, 3);
+        assert_eq!(
+            view.lock()
+                .unwrap()
+                .update(Some(&resumed.cursor()), false)
+                .unwrap()
+                .error
+                .as_deref(),
+            Some(STALE_ERROR)
+        );
+        send(
+            &mut writer,
+            &view,
+            (60, true, serde_json::json!([]), serde_json::json!([]), 0, 4),
+        )
+        .await;
+        assert!(view.lock().unwrap().error.is_none());
+        drop(writer);
+        task.await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn large_full_records_cross_the_pipe_and_ipc_boundary() {
+        use tauri::ipc::{InvokeResponseBody, IpcResponse};
+        let view = Arc::new(Mutex::new(CaptureView::default()));
+        let metadata = "x".repeat(17 * 1024 * 1024);
+        let frame = serde_json::json!({
+            "schema_version":2, "type":"snapshot", "sequence":1, "base_sequence":null,
+            "removed_connection_ids":[], "connection_count":1,
+            "connections":[{"id":"large", "metadata":metadata}],
+            "timestamp":"2026-11-06T00:00:00Z", "runtime":{"status":"running"},
+            "stats":{}, "sandbox":{}, "filter":null
+        });
+        let input = format!("{frame}\n");
+        read_snapshots(BufReader::new(input.as_bytes()), view.clone(), None)
+            .await
+            .unwrap();
+        let response = CaptureResponse(view.lock().unwrap().update(None, true))
+            .body()
+            .unwrap();
+        let InvokeResponseBody::Json(json) = response else {
+            panic!("expected JSON")
+        };
+        let response: Value = serde_json::from_str(&json).unwrap();
+        assert_eq!(response["snapshot"]["connections"][0]["metadata"], metadata);
+        assert_eq!(response["snapshot"]["schema_version"], 1);
+    }
+
+    #[tokio::test]
+    async fn truncated_delta_stream_reports_failed_recovery() {
+        let view = Arc::new(Mutex::new(CaptureView::default()));
+        let error = read_snapshots(BufReader::new(b"{broken\n".as_slice()), view, None)
+            .await
+            .unwrap_err();
+        assert!(error.contains("restored synchronization"));
     }
 
     #[tokio::test]
@@ -1113,34 +1234,66 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn history_receives_snapshots_without_ui_polling_and_drains_on_stop() {
-        let dir = tempfile::tempdir().unwrap();
-        let writer = crate::history::Writer::start(dir.path().join("history.db"), "en0".into())
+    async fn history_receives_reconstructed_deltas_and_preserves_sequence_gaps() {
+        for gap in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("history.db");
+            let writer = crate::history::Writer::start(path.clone(), "en0".into())
+                .await
+                .unwrap();
+            let status = writer.status.clone();
+            let view = Arc::new(Mutex::new(CaptureView::default()));
+            let mut frame = serde_json::json!({
+                "schema_version": 2, "type": "snapshot", "sequence":1, "base_sequence":null,
+                "removed_connection_ids":[], "connection_count":1, "filter":null, "sandbox":{},
+                "connections": [{"id":"retained", "created_at":"2026-11-05T12:00:00Z",
+                    "last_activity":"2026-11-05T12:00:00Z", "protocol":"TCP",
+                    "process":{"pid":1,"name":"test","executable":"/bin/test"},
+                    "remote":{"ip":"1.1.1.1","port":443},
+                    "traffic":{"bytes_sent":100,"bytes_received":200}}],
+                "timestamp": "2026-11-05T12:00:00Z",
+                "runtime": {"status": "running", "process_detection": {"degraded": false}},
+                "stats": {"packets_dropped": 0, "capture_packets_dropped": 0, "interface_packets_dropped": 0}
+            });
+            let mut input = format!("{frame}\n");
+            frame["timestamp"] = "2026-11-05T12:00:01Z".into();
+            if gap {
+                frame["sequence"] = 60.into();
+            } else {
+                frame["type"] = "delta".into();
+                frame["sequence"] = 2.into();
+                frame["base_sequence"] = 1.into();
+                frame["connections"] = serde_json::json!([]);
+            }
+            input.push_str(&format!("{frame}\n"));
+            read_snapshots(
+                BufReader::new(input.as_bytes()),
+                view.clone(),
+                Some(writer.sink.clone()),
+            )
             .await
             .unwrap();
-        let status = writer.status.clone();
-        let view = Arc::new(Mutex::new(CaptureView::default()));
-        let frame = serde_json::json!({
-            "schema_version": 1, "type": "snapshot", "connections": [],
-            "timestamp": "2026-11-05T12:00:00Z",
-            "runtime": {"status": "running", "process_detection": {"degraded": false}},
-            "stats": {"packets_dropped": 0, "capture_packets_dropped": 0, "interface_packets_dropped": 0}
-        });
-        let input = format!("{frame}\n{frame}\n");
-        read_snapshots(
-            BufReader::new(input.as_bytes()),
-            view.clone(),
-            Some(writer.sink.clone()),
-        )
-        .await
-        .unwrap();
-        writer.finish().await;
-        let status = status.lock().unwrap();
-        assert_eq!(status.stored_snapshots, 2);
-        assert_eq!(status.dropped_snapshots, 0);
-        assert!(!status.active);
-        assert_eq!(status.error, None);
-        assert_eq!(view.lock().unwrap().revision, 2);
+            writer.finish().await;
+            let status = status.lock().unwrap();
+            assert_eq!(status.stored_snapshots, 2);
+            assert_eq!(status.dropped_snapshots, 0);
+            assert!(!status.active);
+            assert_eq!(status.error, None);
+            assert_eq!(view.lock().unwrap().revision, 2);
+            // Unchanged connections survive empty deltas; full recovery after a
+            // sequence gap must not claim continuous observation in analytics.
+            let start = 1_793_880_000_000;
+            let query = rustnet_analytics::HistoryQuery {
+                from_ms: start,
+                to_ms: start + 60_000,
+                app_key: None,
+                interface: None,
+                offset: 0,
+            };
+            let report = rustnet_analytics::read_history(&path, &query, start + 60_000).unwrap();
+            assert_eq!(report.applications.len(), 1);
+            assert_eq!(report.totals.observed_ms, if gap { 0 } else { 1000 });
+        }
     }
 
     #[tokio::test]

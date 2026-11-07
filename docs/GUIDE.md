@@ -55,7 +55,7 @@ shutdown, retained history, richer metadata, and capture coverage. The original
 changes remain in the RustNet checkout for separate review. After they merge,
 update `engine.lock.json` to that commit and remove the patch entry and file.
 Every patch has a SHA-256 checksum; changing it requires updating the lock file.
-The desktop expects snapshot schema 1 and tolerates additive fields. Engine
+The bridge accepts engine schema 2 and legacy schema 1, and exposes complete schema 1 snapshots to the UI and saved history. Additive fields are preserved. Engine
 updates must pass frontend validation tests and the Rust bridge tests below.
 The patch is a temporary integration aid, not a second engine implementation.
 
@@ -434,7 +434,7 @@ Test the collector without building Tauri:
 
 The desktop launches only its bundled `rustnet-capture-engine` executable using structured
 arguments, directly or through the approved macOS helper. `--list-interfaces` returns JSON without opening capture. A capture
-uses `--headless --output jsonl --include-historic --stop-on-stdin-close`. Closing the controller pipe
+uses `--headless --output jsonl-delta --include-historic --stop-on-stdin-close`. Closing the controller pipe
 requests the CLI's normal shutdown and output flush, including after a desktop
 crash. Closing the window waits for shutdown. A child that fails to stop within
 15 seconds is terminated and the recording is marked potentially incomplete.
@@ -450,13 +450,13 @@ and execute that protected copy; debug engine overrides are rejected. Recording
 files are created exclusively by the regular user. User GeoIP discovery is
 resolved by the app before descriptors cross the privilege boundary.
 
-The bundled engine also reuses encoded JSON for unchanged historic connections, including extended details. The cache retains up to 10,000 records and 16 MiB of encoded JSON, plus their projected fields and bookkeeping. Late metadata and final counters still update. Full snapshots are still built and sent, so this reduces repeated encoding work but does not make CPU use independent of history size.
+The bundled engine uses schema 2 incremental output from [RustNet #719](https://github.com/domcyrus/rustnet/pull/719), pinned at `f12117d`. Desktop patches include full metadata in both snapshots and deltas. The engine emits full initial, periodic, and terminal snapshots, with complete changed connections and removals between them. Its delta baseline is limited to 10,000 records and 16 MiB of encoded JSON; larger captures fall back to full snapshots. Projection still scans the selected connections, so smaller output does not imply constant CPU use as history grows.
 
-The bridge validates each incoming JSON document once, retains its buffer as shared raw JSON, and caps individual
-records at 16 MiB, and bounds diagnostic output. It forwards JSON without rebuilding
-or deep-copying its connection tree. The UI polls every 500 ms with a cursor;
-unchanged responses omit the payload and do not update charts. Frozen or hidden
-views poll only status, including errors, and request a full snapshot on resume.
+The Rust bridge applies every delta before UI polling or saved-history delivery. It checks sequence continuity, IDs, and reconstructed counts, preserves raw metadata, and shares unchanged connection records. Missing or invalid updates keep the last good view visible with an error until a later full snapshot restores synchronization. Each new capture starts with a fresh baseline. Saved history receives complete snapshots and preserves sequence gaps.
+
+Individual input records and reconstructed snapshots are each limited to 128 MiB, with up to 100,000 connections in incremental mode. Exceeding either bound stops capture with an explicit error rather than truncating data. Diagnostic output is also bounded. The bridge builds complete schema 1 JSON only when the UI or history writer needs it; schema 1 debug-engine input remains supported.
+
+The UI polls every 500 ms with a cursor; unchanged responses omit the payload and do not update charts. Frozen or hidden views poll only status, including errors. Reconstruction continues, and resuming fetches the latest complete snapshot, including additions, removals, and late metadata.
 The UI validates schema 1,
 and shows Connections as one continuous table. Application lists and their destination
 lists use pages of 75 items. Packet decoding, process lookup,

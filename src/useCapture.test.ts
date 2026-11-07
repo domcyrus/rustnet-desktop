@@ -3,7 +3,7 @@ import { act, cleanup, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { useCapture } from "./useCapture";
-import { connectionFixture, viewFixture } from "./test-fixtures";
+import { connectionFixture, richConnectionFixture, viewFixture } from "./test-fixtures";
 
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: vi.fn(), invoke: vi.fn() }));
 beforeEach(() => vi.mocked(isTauri).mockReturnValue(false));
@@ -53,11 +53,19 @@ it("polls status while frozen and fetches the newest data on resume", async () =
   expect(result.current.view.snapshot).toBe(frozen.rates.view.snapshot);
   const latest = structuredClone(view);
   latest.revision = 11;
+  latest.snapshot!.connections = [richConnectionFixture(), connectionFixture({ id: "added-while-frozen" })];
   latest.snapshot!.timestamp = "2026-09-27T12:00:10Z";
   vi.mocked(invoke).mockResolvedValueOnce(latest);
   await act(async () => result.current.togglePaused());
   expect(invoke).toHaveBeenLastCalledWith("capture_view", { known: null, includeSnapshot: true });
   expect(result.current.view.revision).toBe(11);
+  expect(result.current.display.rates.view.snapshot!.connections).toEqual(
+    latest.snapshot!.connections.map((connection) => ({
+      ...connection,
+      traffic: { ...connection.traffic, incoming_bytes_per_second: expect.any(Number), outgoing_bytes_per_second: expect.any(Number) },
+    })),
+  );
+  expect(frozen.rates.view.snapshot!.connections.some((connection) => connection.id === "unknown")).toBe(true);
   expect(result.current.display.history.traffic).toHaveLength(2);
 });
 
@@ -183,4 +191,30 @@ it("unfreezes and clears every history when a new capture starts before its firs
   act(() => result.current.togglePaused());
   expect(result.current.paused).toBe(true);
   expect(result.current.display.rates.session).toBe(2);
+});
+
+it("keeps a hidden frozen view stable and resumes with the complete newest connections", async () => {
+  vi.mocked(invoke).mockResolvedValueOnce(viewFixture()).mockResolvedValue(null);
+  const { result } = await pollingHook();
+  await act(async () => result.current.togglePaused());
+  const frozen = result.current.display;
+  vi.spyOn(document, "hidden", "get").mockReturnValue(true);
+  await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+  await act(async () => result.current.togglePaused());
+  expect(invoke).toHaveBeenLastCalledWith("capture_view", { known: null, includeSnapshot: false });
+  expect(result.current.display).toBe(frozen);
+  const latest = viewFixture();
+  latest.revision = 60;
+  latest.snapshot!.connections = [richConnectionFixture()];
+  latest.snapshot!.timestamp = "2026-09-27T12:00:30Z";
+  vi.mocked(invoke).mockResolvedValueOnce(latest);
+  vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+  await act(async () => document.dispatchEvent(new Event("visibilitychange")));
+  expect(invoke).toHaveBeenLastCalledWith("capture_view", { known: null, includeSnapshot: true });
+  expect(result.current.display.rates.view.snapshot!.connections).toEqual(
+    latest.snapshot!.connections.map((connection) => ({
+      ...connection,
+      traffic: { ...connection.traffic, incoming_bytes_per_second: expect.any(Number), outgoing_bytes_per_second: expect.any(Number) },
+    })),
+  );
 });

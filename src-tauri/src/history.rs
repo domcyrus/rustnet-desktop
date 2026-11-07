@@ -62,7 +62,7 @@ impl Writer {
             dropped_snapshots: 0,
             error: None,
         }));
-        // Two pending records, each bounded by the engine's 16 MiB record limit.
+        // Two pending records, each bounded by the bridge's 128 MiB snapshot limit.
         let (sender, mut receiver) = mpsc::channel::<(u64, Arc<Snapshot>)>(2);
         let sink = Sink {
             sender,
@@ -73,7 +73,7 @@ impl Writer {
             let result = (|| {
                 while let Some((sequence, snapshot)) = receiver.blocking_recv() {
                     if store
-                        .ingest(&snapshot.json, sequence)
+                        .ingest(snapshot.json(), sequence)
                         .map_err(|e| e.to_string())?
                     {
                         progress

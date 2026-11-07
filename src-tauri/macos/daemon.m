@@ -72,7 +72,7 @@ static BOOL RNValidFile(NSFileHandle *file, BOOL output, uid_t uid) {
 }
 
 static NSArray<NSString *> *RNArguments(NSString *interface, NSArray *files) {
-    NSMutableArray *arguments = [@[@"--headless", @"--output", @"jsonl",
+    NSMutableArray *arguments = [@[@"--headless", @"--output", @"jsonl-delta",
         @"--headless-details", @"full", @"--capture-accounting", @"--stop-on-stdin-close",
         @"--include-historic", @"--refresh-interval", @"500", @"--sandbox-strict"] mutableCopy];
     if (interface.length) [arguments addObjectsFromArray:@[@"--interface", interface]];
