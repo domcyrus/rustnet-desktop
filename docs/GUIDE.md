@@ -49,15 +49,17 @@ layout; capture controls require Tauri.
 
 ### Engine development and updates
 
-This repository temporarily carries `engine/patches/0001-desktop-integration.patch`
-for engine changes that have not landed upstream: interface discovery, supervised
-shutdown, retained history, richer metadata, and capture coverage. The original
-changes remain in the RustNet checkout for separate review. After they merge,
-update `engine.lock.json` to that commit and remove the patch entry and file.
+The bundled engine is pinned to [RustNet #721](https://github.com/domcyrus/rustnet/pull/721)
+at `64fe320`, which includes merged #719. Shared CLI features come directly from
+that revision. The only remaining engine patch,
+`engine/patches/0003-windows-capture-helper.patch`, supplies the desktop-only Windows
+capture protocol and preopened recording/GeoIP handles. It stays in this repository;
+application icon lookup and the macOS helper also remain desktop-owned.
 Every patch has a SHA-256 checksum; changing it requires updating the lock file.
-The bridge accepts engine schema 2 and legacy schema 1, and exposes complete schema 1 snapshots to the UI and saved history. Additive fields are preserved. Engine
-updates must pass frontend validation tests and the Rust bridge tests below.
-The patch is a temporary integration aid, not a second engine implementation.
+The bridge accepts engine schema 2 and legacy schema 1, and exposes complete schema 1
+snapshots to the UI and saved history. Additive fields are preserved. Engine updates
+must pass frontend validation and Rust bridge tests, plus native helper/icon tests
+on the corresponding platforms.
 
 The desktop explicitly enables `--headless-details full` and
 `--capture-accounting`. Ordinary headless runs keep the upstream schema and
@@ -450,7 +452,7 @@ and execute that protected copy; debug engine overrides are rejected. Recording
 files are created exclusively by the regular user. User GeoIP discovery is
 resolved by the app before descriptors cross the privilege boundary.
 
-The bundled engine is pinned to RustNet main at `e33cffc`. `engine/patches/0000-incremental-headless.patch` carries the still-unmerged schema 2 incremental output from [RustNet #719](https://github.com/domcyrus/rustnet/pull/719), rebased onto that revision. Desktop patches include full metadata in both snapshots and deltas. The engine emits full initial, periodic, and terminal snapshots, with complete changed connections and removals between them. Its delta baseline is limited to 10,000 records and 16 MiB of encoded JSON; larger captures fall back to full snapshots. Projection still scans the selected connections, so smaller output does not imply constant CPU use as history grows.
+The bundled engine uses schema 2 incremental output and full metadata from [RustNet #721](https://github.com/domcyrus/rustnet/pull/721) at `64fe320`, including merged #719. The engine emits full initial, periodic, and terminal snapshots, with complete changed connections and removals between them. Its delta baseline is limited to 10,000 records and 16 MiB of encoded JSON; larger captures fall back to full snapshots. Projection still scans the selected connections, so smaller output does not imply constant CPU use as history grows.
 
 The Rust bridge applies every delta before UI polling or saved-history delivery. It checks sequence continuity, IDs, and reconstructed counts, preserves raw metadata, and shares unchanged connection records. Missing or invalid updates keep the last good view visible with an error until a later full snapshot restores synchronization. Each new capture starts with a fresh baseline. Saved history receives complete snapshots and preserves sequence gaps.
 
