@@ -3,10 +3,12 @@
 ## [Unreleased]
 
 ### Fixed
+- Make incremental queue tests compare the exact emitted projections, including changing lifecycle countdowns. (#46)
 - Resolve Linux icons for updated executables marked `(deleted)` and shell launchers with a literal final executable path, including Signal. (#40)
 - Resolve Linux application icons for simple shell launchers that locate a sibling executable through a symlink, including ChatGPT. (#39)
 
 ### Changed
+- Rebase the engine and pending #719 changes onto RustNet main at `e33cffc`. Use incremental engine output with full metadata, verified delta reconstruction, freeze/resume continuity, and snapshots up to 128 MiB. (#46)
 - Limit PR and main CI to Linux x64; run macOS and Windows checks on stable releases or manually. (#42)
 - Update the bundled engine to RustNet main at `327a63f` after [#699](https://github.com/domcyrus/rustnet/pull/699), refresh desktop integration patches, and reuse upstream historic JSON caching. (#41)
 - Remove the extra focus rectangle around selected connection names while keeping the row highlight.

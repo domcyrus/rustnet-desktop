@@ -8,7 +8,7 @@ const git = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8", st
 // Each engine revision and patch set gets a separate, disposable build checkout.
 export function prepareEngineSource(desktop) {
   const lock = JSON.parse(readFileSync(path.join(desktop, "engine.lock.json"), "utf8"));
-  if (!/^[a-f0-9]{40}$/.test(lock.revision) || lock.schemaVersion !== 1) {
+  if (!/^[a-f0-9]{40}$/.test(lock.revision) || ![1, 2].includes(lock.schemaVersion)) {
     throw new Error("Invalid engine revision or unsupported snapshot schema in engine.lock.json");
   }
   const patches = lock.patches.map((patch) => {

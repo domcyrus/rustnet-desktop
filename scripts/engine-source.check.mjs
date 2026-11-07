@@ -7,7 +7,7 @@ import os from "node:os";
 import path from "node:path";
 import { prepareEngineSource } from "./engine-source.mjs";
 
-test("pinned engine includes new patch files, reuses cache, and rejects changed sources or patches", () => {
+for (const schemaVersion of [1, 2]) test(`schema ${schemaVersion} engine includes patches, reuses cache, and rejects changed sources or patches`, () => {
   const temp = mkdtempSync(path.join(os.tmpdir(), "rustnet-source-test-"));
   try {
     const upstream = path.join(temp, "upstream");
@@ -22,7 +22,7 @@ test("pinned engine includes new patch files, reuses cache, and rejects changed 
     const patch = "diff --git a/new.txt b/new.txt\nnew file mode 100644\n--- /dev/null\n+++ b/new.txt\n@@ -0,0 +1 @@\n+patched\n";
     const patchFile = path.join(desktop, "engine.patch");
     writeFileSync(patchFile, patch);
-    writeFileSync(path.join(desktop, "engine.lock.json"), JSON.stringify({ repository: upstream, revision, schemaVersion: 1,
+    writeFileSync(path.join(desktop, "engine.lock.json"), JSON.stringify({ repository: upstream, revision, schemaVersion,
       patches: [{ file: "engine.patch", sha256: createHash("sha256").update(patch).digest("hex") }] }));
     const source = prepareEngineSource(desktop);
     assert.equal(readFileSync(path.join(source, "new.txt"), "utf8"), "patched\n");

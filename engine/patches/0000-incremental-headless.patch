@@ -1,0 +1,1025 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+index 08c26b5..c54c947 100644
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -13,13 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
+ 
+ ### Changed
+ - Avoid allocating idle rate strings in the UI while preserving rate labels and placeholders (#429)
+-- Reuse unchanged historic headless connection JSON with a bounded cache while preserving full snapshots and late metadata updates (#707)
++- Reuse unchanged historic headless connection JSON with a bounded cache while preserving full snapshots and late metadata updates (#709)
+ - Share DNS/RTT pending-request bookkeeping, procfs socket parsing, and JSON log construction while preserving protocol and output behavior (#699)
+ - Remove redundant `IngestOutcome` timing fields and the `network::platform` shim; library callers read retained timings from `Connection` and import host lookup from `rustnet_host` (#699)
+ - Run Windows CI tests independently and start DEB installation checks after GNU/Linux builds, preserving all existing checks (#686)
+ - Avoid allocating static Overview titles and expanded process-group connectors on each render (#412)
+ 
+ ### Added
++- Add opt-in incremental headless JSONL with sequence checks, bounded baselines, and periodic full snapshots for resynchronization (#719)
+ - Add shared Host timeframes for network events and interface errors, keeping cumulative totals visible
+ - Show per-resolver DNS health, retries, pending age, selectable 60s/5m/1h/since-startup windows, and 15-minute recent issue evidence in Host
+ - Log cached local listening/bound port status on incoming new TCP/UDP connections (#682)
+diff --git a/USAGE.ja.md b/USAGE.ja.md
+index 80fb303..5b36b01 100644
+--- a/USAGE.ja.md
++++ b/USAGE.ja.md
+@@ -143,5 +143,22 @@ group_by_process = true
+ 変更のない履歴接続レコードの JSON エンコード結果を再利用します。キャッシュには最大
+ 10,000 件のレコードと 16 MiB の接続 JSON に加え、対応する出力用フィールドと管理データを保持します。
+ 出力対象の全接続フィールドを比較するため、遅れて届くメタデータや最終カウンターも更新されます。
+-各出力レコードは引き続きスキーマバージョン 1 の完全なスナップショットです。
++`jsonl` と `json` の各出力レコードは引き続きスキーマバージョン 1 の完全なスナップショットです。
+ スナップショットの構築コストと出力サイズは、表示対象の接続数に応じて増加します。
++
++## 増分 JSONL（未リリース）
++
++`--headless --output jsonl-delta` で **スキーマバージョン 2** を有効にします。既定の `jsonl` と `json` はバージョン 1 のままです。利用側は切り替え前に以下の規則に対応してください。
++
++- **スナップショット：** `type: "snapshot"` は全状態を置き換えます。`connections` は対象の全接続、`base_sequence` は null、`removed_connection_ids` は空です。最初、終了時、前回の完全スナップショットから 60 レコード後、または 30 秒経過後の次の出力時の早い方で、完全スナップショットを送ります。
++- **差分：** `type: "delta"` を不可分に適用します。`removed_connection_ids` を削除し、完全な `connections` オブジェクトを `id` で追加または置換します。`timestamp`、`runtime`、`sandbox`、`stats`、`filter` は毎回置き換えます。適用後の総数が `connection_count` と一致することを検証し、完全スナップショットと同じ順序にするには `id` で並べ替えます。
++- **復旧：** 新しいストリームは `sequence: 1` から始まります。差分の `base_sequence` は最後に適用した番号、`sequence` はその次の番号である必要があります。欠落、重複、不正なレコード、件数の不一致があれば状態を古いものとし、有効な完全スナップショットまで差分を無視します。ストリームを混在させないでください。復旧には定期的なスナップショットを使い、stdin による再同期要求はありません。
++- **上限：** 基準状態はアクティブ・履歴接続を合計 10,000 件、JSON を 16 MiB まで保持し、別途出力用フィールドと管理データを保持します。上限を超えると全状態が再び収まるまで完全スナップショットを使います。遅れて届くメタデータや最終カウンターを含む全出力フィールドを比較します。
++
++差分は直前に出力した状態を基準にするため、バックプレッシャーによる `runtime.snapshot_generation` の欠番は問題ありません。バッファ、終了期限、エラー処理は `jsonl` と同じで、書き込みの失敗や停止時は最終出力を保証しません。
++
++変更のない出力を減らしますが、完全なスナップショットの構築は必要で、大半の接続が変化するとコストが増える場合があります。イベント履歴は追加しません。負荷の測定は [PROFILING.md](PROFILING.md) を参照してください。合成ベンチマーク：
++
++```bash
++cargo test --release --locked --lib --all-features benchmark_history_encoding -- --ignored --nocapture
++```
+diff --git a/USAGE.md b/USAGE.md
+index 4a43676..7836cdf 100644
+--- a/USAGE.md
++++ b/USAGE.md
+@@ -156,9 +156,9 @@ The headless controls are:
+ 
+ #### Schema contract
+ 
+-The current wire schema is `schema_version = 1`. Every record is a snapshot object with these top-level fields: `schema_version`, `type`, `timestamp`, `runtime`, `sandbox`, `stats`, `filter`, `connection_count`, and `connections`. A terminal record sets `runtime.status` to `stopping`, `stopped`, or `stopped_with_errors`, and includes `runtime.termination_reason` and `runtime.shutdown`. Connection records cover endpoints, process attribution, traffic, protocol timing, GeoIP, and optional Kubernetes metadata. The `rtt` object includes current, initial, smoothed TCP, DNS, LLMNR, NetBIOS, ICMP echo, STUN, and NTP timings in milliseconds. Optional enrichment and timing fields remain null until discovered; connections drained during shutdown can appear before process, GeoIP, or Kubernetes enrichment completes. Consumers must branch on `schema_version` and tolerate unknown additive fields.
++The default `jsonl` and `json` wire schema is `schema_version = 1`. Every record is a snapshot object with these top-level fields: `schema_version`, `type`, `timestamp`, `runtime`, `sandbox`, `stats`, `filter`, `connection_count`, and `connections`. A terminal record sets `runtime.status` to `stopping`, `stopped`, or `stopped_with_errors`, and includes `runtime.termination_reason` and `runtime.shutdown`. Connection records cover endpoints, process attribution, traffic, protocol timing, GeoIP, and optional Kubernetes metadata. The `rtt` object includes current, initial, smoothed TCP, DNS, LLMNR, NetBIOS, ICMP echo, STUN, and NTP timings in milliseconds. Optional enrichment and timing fields remain null until discovered; connections drained during shutdown can appear before process, GeoIP, or Kubernetes enrichment completes. Consumers must branch on `schema_version` and tolerate unknown additive fields.
+ 
+-Development builds reuse encoded JSON for unchanged historic headless connections. The cache retains at most 10,000 records and 16 MiB of encoded connection JSON, plus their projected fields and bookkeeping. It compares all exported connection fields, so late metadata and final counters still update. Every output record remains a full snapshot with schema version 1; snapshot construction and output size still grow with the number of visible connections.
++Development builds reuse encoded JSON for unchanged historic headless connections. The cache retains at most 10,000 records and 16 MiB of encoded connection JSON, plus their projected fields and bookkeeping. It compares all exported connection fields, so late metadata and final counters still update. In `jsonl` and `json` mode, every output record remains a full snapshot with schema version 1; snapshot construction and output size still grow with the number of visible connections.
+ 
+ Connection `id` values are opaque identifiers that remain stable when a connection becomes historic and distinguish later connections reusing the same endpoints. Traffic rates use `traffic.outgoing_bytes_per_second` and `traffic.incoming_bytes_per_second`, both in bytes per second. If workers exceed the shutdown deadline, the terminal status remains `stopping` and `runtime.shutdown.timed_out_workers` reports their count. That record can contain the last published snapshot rather than fully drained state; the process exits unsuccessfully.
+ 
+@@ -166,6 +166,23 @@ Closing a JSONL pipeline early, for example with `head`, produces a broken pipe.
+ 
+ `stats.packets_captured` and `stats.bytes_captured` are cumulative totals since startup, independent of connection retention, `--filter`, and TUI clears. Every packet delivered by libpcap is counted before attribution gating, processing queue drops, parsing, or tracking limits. Bytes use libpcap's original packet length before snaplen truncation, including the capture link type's headers; they are neither application payload bytes nor exact physical wire usage. Capture interface selection and `--bpf-filter` determine coverage. Packets lost before delivery or bypassing capture are excluded, and duplicate observations on multiple interfaces are counted separately. These totals have no ingress/egress or client attribution. The fields extend schema version 1 additively; older producers may omit them. External exporters can expose them as Prometheus counters, treating restart as a reset and checking snapshot freshness and capture drops. Values are sampled independently while capture is running.
+ 
++#### Incremental JSONL (unreleased)
++
++`--headless --output jsonl-delta` opts into **schema version 2**. Default `jsonl` and `json` output stays at version 1. Consumers must support these rules before switching:
++
++- **Snapshots:** `type: "snapshot"` replaces all state. `connections` contains all selected connections, `base_sequence` is null, and `removed_connection_ids` is empty. Full snapshots are sent initially, at shutdown, and after 60 records or on the next emission after 30 seconds, whichever comes first.
++- **Deltas:** apply `type: "delta"` atomically: delete `removed_connection_ids`, then insert or replace the complete `connections` objects by `id`. Replace `timestamp`, `runtime`, `sandbox`, `stats`, and `filter` on every record. Verify the resulting total equals `connection_count`; sort by `id` to match full-snapshot ordering.
++- **Recovery:** each new stream starts at `sequence: 1`. A delta's `base_sequence` must equal the last applied sequence, and `sequence` must be its successor. On gaps, duplicates, invalid records, or count mismatches, mark state stale and ignore deltas until a valid full snapshot arrives. Do not combine streams. Recovery uses periodic snapshots, with no stdin resync request.
++- **Limits:** the baseline holds up to 10,000 active/historic connections and 16 MiB of encoded JSON, plus projected fields and bookkeeping. Larger states use full snapshots until a complete baseline fits again. All exported fields participate in change detection, including late metadata and final counters.
++
++Deltas compare against the preceding emitted state, so skipped `runtime.snapshot_generation` values under backpressure are safe. Buffering, shutdown deadlines, and error handling match `jsonl`; terminal delivery is not guaranteed if writing fails or blocks.
++
++This reduces unchanged output, but still constructs full snapshots and can cost more when most connections change. It does not add event history. See [PROFILING.md](PROFILING.md) for workload measurements. The synthetic benchmark is:
++
++```bash
++cargo test --release --locked --lib --all-features benchmark_history_encoding -- --ignored --nocapture
++```
++
+ #### Traffic history and capture files
+ 
+ Snapshot JSONL is not a packet log or a complete connection-event history. Short-lived connections, especially generations that reuse the same endpoints between snapshots, can be absent from the entire stream. This can happen with zero packet drops and no gaps in `runtime.snapshot_generation`. Global `stats.packets_processed` can therefore be correct while the sum of the visible connection counters is smaller. Do not sum cumulative counters across snapshots or treat a terminal snapshot as a complete session history.
+@@ -182,7 +199,7 @@ When export succeeds, PCAP preserves the packets received by the capture backend
+ 
+ Stdout, JSON logs, PCAP, its generated `.connections.jsonl` sidecar, and PCAPNG must use distinct files. RustNet rejects regular-file stdout aliases before it truncates or writes configured outputs. However, shell redirection with `>` can truncate a file before RustNet starts, so always choose a separate snapshot path.
+ 
+-Every emitted record contains a full selected snapshot. More connections, richer metadata, and shorter refresh intervals increase CPU, memory, and disk usage. A five-second interval reduces output frequency but does not preserve connections missed between snapshots or remove background collection costs. Measure your own traffic and storage budget before unattended use.
++With `jsonl` or `json`, every emitted record contains a full selected snapshot. More connections, richer metadata, and shorter refresh intervals increase CPU, memory, and disk usage. A five-second interval reduces output frequency but does not preserve connections missed between snapshots or remove background collection costs. Measure your own traffic and storage budget before unattended use.
+ 
+ ### Option Details
+ 
+diff --git a/USAGE.zh-CN.md b/USAGE.zh-CN.md
+index cf3fb34..da8a643 100644
+--- a/USAGE.zh-CN.md
++++ b/USAGE.zh-CN.md
+@@ -155,9 +155,9 @@ rustnet --headless --filter 'process:curl app:https'
+ 
+ #### Schema 约定
+ 
+-当前输出格式版本为 `schema_version = 1`。每条记录都是快照对象，顶层字段为 `schema_version`、`type`、`timestamp`、`runtime`、`sandbox`、`stats`、`filter`、`connection_count` 和 `connections`。最终终止记录会将 `runtime.status` 设为 `stopping`、`stopped` 或 `stopped_with_errors`，并包含 `runtime.termination_reason` 和 `runtime.shutdown`。连接记录涵盖端点、进程归属、流量、各协议计时、GeoIP，以及可选的 Kubernetes 元数据。`rtt` 对象以毫秒为单位提供当前值、初始值、平滑 TCP 值，以及 DNS、LLMNR、NetBIOS、ICMP echo、STUN 和 NTP 计时。可选的增强与计时字段在被发现前保持为 null；关闭期间排空的连接可能在进程、GeoIP 或 Kubernetes 增强完成前就出现在最终记录中。使用方必须根据 `schema_version` 选择解析逻辑，并允许出现新增的未知字段。
++默认 `jsonl` 和 `json` 输出格式版本为 `schema_version = 1`。每条记录都是快照对象，顶层字段为 `schema_version`、`type`、`timestamp`、`runtime`、`sandbox`、`stats`、`filter`、`connection_count` 和 `connections`。最终终止记录会将 `runtime.status` 设为 `stopping`、`stopped` 或 `stopped_with_errors`，并包含 `runtime.termination_reason` 和 `runtime.shutdown`。连接记录涵盖端点、进程归属、流量、各协议计时、GeoIP，以及可选的 Kubernetes 元数据。`rtt` 对象以毫秒为单位提供当前值、初始值、平滑 TCP 值，以及 DNS、LLMNR、NetBIOS、ICMP echo、STUN 和 NTP 计时。可选的增强与计时字段在被发现前保持为 null；关闭期间排空的连接可能在进程、GeoIP 或 Kubernetes 增强完成前就出现在最终记录中。使用方必须根据 `schema_version` 选择解析逻辑，并允许出现新增的未知字段。
+ 
+-开发版本会复用未变化的无界面历史连接记录的 JSON 编码。缓存最多保留 10,000 条记录和 16 MiB 的连接 JSON 编码，以及对应的投影字段和管理数据。它会比较所有导出的连接字段，因此延迟到达的元数据和最终计数仍会更新。每条输出记录仍然是版本 1 的完整快照；快照构建开销和输出大小仍会随可见连接数量增长。
++开发版本会复用未变化的无界面历史连接记录的 JSON 编码。缓存最多保留 10,000 条记录和 16 MiB 的连接 JSON 编码，以及对应的投影字段和管理数据。它会比较所有导出的连接字段，因此延迟到达的元数据和最终计数仍会更新。在 `jsonl` 和 `json` 模式下，每条输出记录仍然是版本 1 的完整快照；快照构建开销和输出大小仍会随可见连接数量增长。
+ 
+ 连接 `id` 是不透明标识符，连接转为历史记录后保持不变，并区分之后复用同一端点的连接。流量速率字段为 `traffic.outgoing_bytes_per_second` 和 `traffic.incoming_bytes_per_second`，单位均为字节每秒。如果工作线程超过关闭期限，终止状态保持为 `stopping`，`runtime.shutdown.timed_out_workers` 会报告其数量。此时记录可能仍是最后发布的快照，而非完全排空后的状态；进程以非零状态退出。
+ 
+@@ -165,6 +165,23 @@ rustnet --headless --filter 'process:curl app:https'
+ 
+ `stats.packets_captured` 和 `stats.bytes_captured` 是从启动开始的累计计数，不受连接保留策略、`--filter` 或 TUI 清空操作影响。libpcap 交付的每个数据包都会在归属判断、处理队列丢包、解析或连接跟踪限制之前计入。字节数使用 libpcap 报告的 snaplen 截断前原始包长，包含捕获链路类型的头部，既不是应用负载字节数，也不是精确的物理线路用量。捕获接口和 `--bpf-filter` 决定覆盖范围；交付前丢失或绕过捕获的数据包不计入，在多个接口上重复观察到的数据包会分别计数。这些总量不区分流入、流出或客户端。字段以新增方式扩展 schema 版本 1，旧版本输出可能没有这些字段。外部导出器可将其映射为 Prometheus counter，将重启视为计数重置，并检查快照新鲜度和捕获丢包。捕获运行期间，各计数值独立采样。
+ 
++#### 增量 JSONL（未发布）
++
++`--headless --output jsonl-delta` 显式启用 **schema 版本 2**。默认 `jsonl` 和 `json` 仍使用版本 1。使用方切换前必须支持以下规则：
++
++- **快照：**`type: "snapshot"` 替换全部状态。`connections` 包含所有选中的连接，`base_sequence` 为 null，`removed_connection_ids` 为空。首次、关闭时，以及距上次完整快照 60 条记录后或满 30 秒后的下一次输出时，发送完整快照，以先到者为准。
++- **增量：**原子应用 `type: "delta"`：先删除 `removed_connection_ids`，再按 `id` 插入或替换完整的 `connections` 对象。每条记录都替换 `timestamp`、`runtime`、`sandbox`、`stats` 和 `filter`。验证最终总数等于 `connection_count`；按 `id` 排序可匹配完整快照的顺序。
++- **恢复：**每个新流从 `sequence: 1` 开始。增量的 `base_sequence` 必须等于最后应用的序号，`sequence` 必须是其下一序号。遇到间断、重复、无效记录或数量不符时，将状态标为过期，并忽略增量直到有效完整快照到达。不要混合不同流。恢复依靠周期性快照，不支持 stdin 重新同步请求。
++- **上限：**基线最多保留合计 10,000 条活跃及历史连接、16 MiB 的 JSON 编码，以及投影字段和管理数据。超过上限时使用完整快照，直到完整基线再次满足上限。所有导出字段都参与变化检测，包括延迟元数据和最终计数。
++
++增量基于上一次实际输出的状态计算，因此背压导致的 `runtime.snapshot_generation` 间断是安全的。缓冲、关闭期限和错误处理与 `jsonl` 相同；写入失败或阻塞时不保证最终记录送达。
++
++此模式减少未变化的输出，但仍构建完整快照，且大部分连接变化时开销可能更高。它不增加事件历史。工作负载测量见 [PROFILING.zh-CN.md](PROFILING.zh-CN.md)。合成基准命令：
++
++```bash
++cargo test --release --locked --lib --all-features benchmark_history_encoding -- --ignored --nocapture
++```
++
+ #### 流量历史与抓包文件
+ 
+ 快照 JSONL 不是逐包日志，也不是完整的连接事件历史。短连接，尤其是在两次快照之间复用相同端点的新一代连接，可能不会出现在整个输出流中。即使没有丢包且 `runtime.snapshot_generation` 连续，也可能发生这种情况。因此，全局 `stats.packets_processed` 可以准确，而可见连接的计数之和仍然较小。不要跨快照累加累计计数，也不要将最终快照视为完整的会话历史。
+@@ -181,7 +198,7 @@ rustnet --headless --interface eth0 --duration 60 --refresh-interval 5000 \
+ 
+ stdout、JSON 日志、PCAP、自动生成的 `.connections.jsonl` 旁路文件和 PCAPNG 必须使用不同文件。RustNet 会在截断或写入配置的输出文件前拒绝指向同一普通文件的 stdout。然而，shell 的 `>` 重定向可能在 RustNet 启动前截断文件，因此务必为快照选择独立路径。
+ 
+-每条输出记录都包含一份完整的选定快照。连接越多、元数据越丰富、刷新间隔越短，CPU、内存和磁盘开销通常越大。五秒间隔可降低输出频率，但不能保留快照之间错过的连接，也不会消除后台采集开销。无人值守运行前，请测量实际流量下的资源和存储需求。
++在 `jsonl` 和 `json` 模式下，每条输出记录都包含一份完整的选定快照。连接越多、元数据越丰富、刷新间隔越短，CPU、内存和磁盘开销通常越大。五秒间隔可降低输出频率，但不能保留快照之间错过的连接，也不会消除后台采集开销。无人值守运行前，请测量实际流量下的资源和存储需求。
+ 
+ ### 选项详情<a id="option-details"></a>
+ 
+diff --git a/src/cli.rs b/src/cli.rs
+index 3fdaa5c..e751f36 100644
+--- a/src/cli.rs
++++ b/src/cli.rs
+@@ -71,9 +71,9 @@ pub fn build_cli() -> Command {
+                 .long("output")
+                 .value_name("FORMAT")
+                 .help(
+-                    "Headless output format: jsonl (stream snapshots) or json (final snapshot)",
++                    "Headless output format: jsonl (snapshots), jsonl-delta (incremental), or json (final snapshot)",
+                 )
+-                .value_parser(["jsonl", "json"])
++                .value_parser(["jsonl", "jsonl-delta", "json"])
+                 .requires("headless")
+                 .required(false),
+         )
+@@ -350,7 +350,7 @@ mod tests {
+ 
+     #[test]
+     fn headless_output_accepts_each_supported_format() {
+-        for format in ["jsonl", "json"] {
++        for format in ["jsonl", "jsonl-delta", "json"] {
+             let matches = build_cli()
+                 .try_get_matches_from(["rustnet", "--headless", "--output", format])
+                 .unwrap_or_else(|e| panic!("--output {format} should parse: {e}"));
+diff --git a/src/headless/mod.rs b/src/headless/mod.rs
+index 440c454..855ac49 100644
+--- a/src/headless/mod.rs
++++ b/src/headless/mod.rs
+@@ -17,14 +17,18 @@ mod output;
+ mod schema;
+ 
+ use output::AsyncOutput;
++use schema::incremental::IncrementalEncoder;
+ use schema::{ConnectionCache, RuntimePhase, SnapshotEnvelope};
+ 
+ #[cfg(test)]
+ mod tests;
+ 
+-/// Current headless output schema.
++/// Default full-snapshot output schema.
+ pub const SCHEMA_VERSION: u8 = 1;
+ 
++/// Opt-in incremental headless output schema.
++pub const INCREMENTAL_SCHEMA_VERSION: u8 = 2;
++
+ const MAX_STOP_POLL_INTERVAL: Duration = Duration::from_millis(50);
+ const OUTPUT_SHUTDOWN_DEADLINE: Duration = Duration::from_secs(2);
+ 
+@@ -36,6 +40,9 @@ pub enum HeadlessFormat {
+     /// gaps because stale queued snapshots are replaced under backpressure.
+     #[default]
+     JsonLines,
++    /// Emit an initial full snapshot, batched connection changes, periodic full
++    /// snapshots for resynchronization, and a full terminal snapshot.
++    JsonLinesDelta,
+     /// Emit exactly one snapshot after the shutdown attempt.
+     Json,
+ }
+@@ -45,6 +52,7 @@ impl HeadlessFormat {
+     pub const fn as_str(self) -> &'static str {
+         match self {
+             Self::JsonLines => "jsonl",
++            Self::JsonLinesDelta => "jsonl-delta",
+             Self::Json => "json",
+         }
+     }
+@@ -62,8 +70,9 @@ impl std::str::FromStr for HeadlessFormat {
+     fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+         match value {
+             "jsonl" => Ok(Self::JsonLines),
++            "jsonl-delta" => Ok(Self::JsonLinesDelta),
+             "json" => Ok(Self::Json),
+-            _ => Err("expected jsonl or json"),
++            _ => Err("expected jsonl, jsonl-delta or json"),
+         }
+     }
+ }
+@@ -151,14 +160,21 @@ fn run_with_writer_deadline<W: Write + Send + 'static>(
+     writer_deadline: Duration,
+ ) -> Result<StopReport> {
+     let mut cache = ConnectionCache::default();
+-    let mut output =
+-        match AsyncOutput::spawn_with_serializer(writer, move |value| cache.serialize(value)) {
+-            Ok(output) => output,
+-            Err(error) => {
+-                let _ = app.stop();
+-                return Err(error).context("failed to start headless output writer");
+-            }
+-        };
++    let mut incremental = IncrementalEncoder::default();
++    let format = options.format;
++    let mut output = match AsyncOutput::spawn_with_serializer(writer, move |value| {
++        if format == HeadlessFormat::JsonLinesDelta {
++            incremental.serialize(value)
++        } else {
++            cache.serialize(value)
++        }
++    }) {
++        Ok(output) => output,
++        Err(error) => {
++            let _ = app.stop();
++            return Err(error).context("failed to start headless output writer");
++        }
++    };
+     let started = Instant::now();
+     let poll_interval = app
+         .snapshot_refresh_interval()
+@@ -166,7 +182,7 @@ fn run_with_writer_deadline<W: Write + Send + 'static>(
+         .max(Duration::from_millis(1));
+ 
+     let monitor_result = match options.format {
+-        HeadlessFormat::JsonLines => stream_json_lines(
++        HeadlessFormat::JsonLines | HeadlessFormat::JsonLinesDelta => stream_json_lines(
+             app,
+             &mut output,
+             options,
+diff --git a/src/headless/schema.rs b/src/headless/schema.rs
+index ef76c3b..4357c74 100644
+--- a/src/headless/schema.rs
++++ b/src/headless/schema.rs
+@@ -13,6 +13,8 @@ use crate::network::types::{AttributionSource, Connection, ConnectionKey};
+ 
+ use super::{SCHEMA_VERSION, TerminationReason};
+ 
++pub(super) mod incremental;
++
+ #[cfg(test)]
+ mod profiling;
+ 
+diff --git a/src/headless/schema/cache_tests.rs b/src/headless/schema/cache_tests.rs
+index 62d1bf9..55f7a51 100644
+--- a/src/headless/schema/cache_tests.rs
++++ b/src/headless/schema/cache_tests.rs
+@@ -157,11 +157,12 @@ fn signed_zero_changes_preserve_the_original_encoding() {
+     }
+ }
+ 
+-// Run explicitly in release mode. Measures projection plus encoding, not capture
+-// or whole-process CPU. Both paths use the same synthetic connection snapshots.
++// Run explicitly in release mode. Includes periodic full resynchronization.
++// Measures projection and encoding, not capture or whole-process CPU.
+ #[test]
+ #[ignore = "manual release-mode performance measurement"]
+ fn benchmark_history_encoding() {
++    use super::incremental::IncrementalEncoder;
+     use std::hint::black_box;
+     use std::time::Instant;
+ 
+@@ -172,8 +173,15 @@ fn benchmark_history_encoding() {
+         .into_iter()
+         .find(|c| c.pid.is_some())
+         .unwrap();
+-    const ITERATIONS: usize = 100;
+-    for (active, historic) in [(100, 0), (100, 1_000), (100, 5_000), (5_000, 0)] {
++    const ITERATIONS: usize = 120;
++    for (active, historic, metadata_bytes) in [
++        (100, 0, 0),
++        (100, 1_000, 0),
++        (100, 5_000, 0),
++        (5_000, 0, 0),
++        (100, 5_000, 1_024),
++        (100, 10_000, 0),
++    ] {
+         let connections: Vec<_> = (0..active + historic)
+             .map(|index| {
+                 let mut connection = template.clone();
+@@ -182,27 +190,28 @@ fn benchmark_history_encoding() {
+                 connection.closed_at = connection.is_historic.then_some(connection.last_activity);
+                 connection.current_incoming_rate_bps = 0.0;
+                 connection.current_outgoing_rate_bps = 0.0;
++                if metadata_bytes > 0 {
++                    connection.executable =
++                        Some(std::path::PathBuf::from("x".repeat(metadata_bytes)).into());
++                }
+                 connection
+             })
+             .collect();
+         app.set_connections_snapshot_for_test(connections);
+         let mut cache = ConnectionCache::default();
+-        cache
+-            .serialize(SnapshotEnvelope::new(&app, None, RuntimePhase::Running, None, None).1)
+-            .unwrap();
+-        let mut uncached_time = Duration::ZERO;
+-        let mut cached_time = Duration::ZERO;
+-        let mut payload = 0;
++        let mut incremental = IncrementalEncoder::default();
++        let snapshot = || SnapshotEnvelope::new(&app, None, RuntimePhase::Running, None, None).1;
++        cache.serialize(snapshot()).unwrap();
++        incremental.serialize(snapshot()).unwrap();
++        let mut projection_time = [Duration::ZERO; 3];
++        let mut encoding_time = [Duration::ZERO; 3];
++        let mut payload = [0; 3];
+         for iteration in 0..ITERATIONS {
+-            // Alternate execution order to reduce systematic warm-up bias.
+-            for cached in if iteration % 2 == 0 {
+-                [false, true]
+-            } else {
+-                [true, false]
+-            } {
++            // Rotate execution order to reduce systematic warm-up bias.
++            for offset in 0..3 {
++                let mode = (iteration + offset) % 3;
+                 let started = Instant::now();
+-                let mut record =
+-                    SnapshotEnvelope::new(&app, None, RuntimePhase::Running, None, None).1;
++                let mut record = snapshot();
+                 for connection in &mut record.connections {
+                     if !connection.historic {
+                         connection.traffic.bytes_sent += iteration as u64 + 1;
+@@ -210,24 +219,29 @@ fn benchmark_history_encoding() {
+                             finite(iteration as f64 + 1.0);
+                     }
+                 }
+-                let bytes = if cached {
+-                    cache.serialize(record).unwrap()
+-                } else {
+-                    serialize_record(&record).unwrap()
++                projection_time[mode] += started.elapsed();
++                let started = Instant::now();
++                let bytes = match mode {
++                    0 => serialize_record(&record).unwrap(),
++                    1 => cache.serialize(record).unwrap(),
++                    _ => incremental.serialize(record).unwrap(),
+                 };
+-                payload = black_box(bytes).len();
+-                if cached {
+-                    cached_time += started.elapsed();
+-                } else {
+-                    uncached_time += started.elapsed();
+-                }
++                payload[mode] += black_box(bytes).len();
++                encoding_time[mode] += started.elapsed();
+             }
+         }
+-        eprintln!(
+-            "active={active} historic={historic} bytes={payload} projection+encoding uncached={:.3}ms cached={:.3}ms ratio={:.2}x",
+-            uncached_time.as_secs_f64() * 1_000.0 / ITERATIONS as f64,
+-            cached_time.as_secs_f64() * 1_000.0 / ITERATIONS as f64,
+-            uncached_time.as_secs_f64() / cached_time.as_secs_f64()
+-        );
++        for (mode, name) in ["uncached", "cached", "incremental"]
++            .into_iter()
++            .enumerate()
++        {
++            eprintln!(
++                "active={active} historic={historic} metadata_bytes={metadata_bytes} mode={name} avg_bytes={} projection={:.3}ms encoding={:.3}ms total={:.3}ms",
++                payload[mode] / ITERATIONS,
++                projection_time[mode].as_secs_f64() * 1_000.0 / ITERATIONS as f64,
++                encoding_time[mode].as_secs_f64() * 1_000.0 / ITERATIONS as f64,
++                (projection_time[mode] + encoding_time[mode]).as_secs_f64() * 1_000.0
++                    / ITERATIONS as f64,
++            );
++        }
+     }
+ }
+diff --git a/src/headless/schema/incremental.rs b/src/headless/schema/incremental.rs
+new file mode 100644
+index 0000000..04ddfaf
+--- /dev/null
++++ b/src/headless/schema/incremental.rs
+@@ -0,0 +1,152 @@
++//! Stateful encoding runs only on the output worker, after queue replacement.
++
++use std::time::Instant;
++
++use super::*;
++use crate::headless::INCREMENTAL_SCHEMA_VERSION;
++use crate::headless::output::serialize_record;
++
++const FULL_SNAPSHOT_INTERVAL: Duration = Duration::from_secs(30);
++const FULL_SNAPSHOT_RECORDS: u64 = 60;
++
++#[derive(Serialize)]
++struct IncrementalRecord<C> {
++    sequence: u64,
++    base_sequence: Option<u64>,
++    removed_connection_ids: Vec<String>,
++    #[serde(flatten)]
++    snapshot: SnapshotEnvelope<C>,
++}
++
++#[derive(Default)]
++pub(in crate::headless) struct IncrementalEncoder {
++    // None means no complete baseline is retained. An empty baseline is valid.
++    previous: Option<Vec<CachedConnection>>,
++    sequence: u64,
++    last_full: Option<(u64, Instant)>,
++}
++
++impl IncrementalEncoder {
++    pub(in crate::headless) fn serialize(
++        &mut self,
++        snapshot: SnapshotEnvelope,
++    ) -> anyhow::Result<Vec<u8>> {
++        self.serialize_at(
++            snapshot,
++            Instant::now(),
++            MAX_CACHED_CONNECTIONS,
++            MAX_CACHED_JSON_BYTES,
++        )
++    }
++
++    fn serialize_at(
++        &mut self,
++        mut snapshot: SnapshotEnvelope,
++        now: Instant,
++        max_connections: usize,
++        max_bytes: usize,
++    ) -> anyhow::Result<Vec<u8>> {
++        let sequence = self
++            .sequence
++            .checked_add(1)
++            .ok_or_else(|| anyhow::anyhow!("headless output sequence exhausted"))?;
++        snapshot.schema_version = INCREMENTAL_SCHEMA_VERSION;
++        let full = self.previous.is_none()
++            || snapshot.runtime.shutdown.is_some()
++            || self.last_full.is_none_or(|(last_sequence, time)| {
++                sequence - last_sequence >= FULL_SNAPSHOT_RECORDS
++                    || now.duration_since(time) >= FULL_SNAPSHOT_INTERVAL
++            });
++
++        if snapshot.connections.len() > max_connections {
++            return self.full_without_baseline(snapshot, sequence, now);
++        }
++
++        let mut previous = self.previous.iter().flatten().peekable();
++        let mut encoded = Vec::with_capacity(snapshot.connections.len());
++        let mut updates = Vec::new();
++        let mut removed = Vec::new();
++        let mut bytes = 0;
++        for projected in &snapshot.connections {
++            // Sorted opaque IDs make both change detection and removal a linear
++            // merge. Compare every exported field, including late enrichment.
++            while previous
++                .peek()
++                .is_some_and(|entry| entry.projected.id < projected.id)
++            {
++                removed.push(previous.next().unwrap().projected.id.clone());
++            }
++            let matching = if previous
++                .peek()
++                .is_some_and(|entry| entry.projected.id == projected.id)
++            {
++                previous.next()
++            } else {
++                None
++            };
++            let unchanged = matching.filter(|entry| entry.projected == *projected);
++            let json: Arc<RawValue> = match unchanged {
++                Some(entry) => Arc::clone(&entry.json),
++                None => Arc::from(serde_json::value::to_raw_value(projected)?),
++            };
++            if json.get().len() > max_bytes - bytes {
++                // A partial baseline cannot safely describe removals. Send the
++                // entire snapshot and retry establishing a baseline next time.
++                return self.full_without_baseline(snapshot, sequence, now);
++            }
++            bytes += json.get().len();
++            if !full && unchanged.is_none() {
++                updates.push(Arc::clone(&json));
++            }
++            encoded.push(json);
++        }
++        if !full {
++            removed.extend(previous.map(|entry| entry.projected.id.clone()));
++            snapshot.record_type = "delta";
++        } else {
++            removed.clear();
++        }
++
++        let projected = std::mem::take(&mut snapshot.connections);
++        let record = IncrementalRecord {
++            sequence,
++            base_sequence: (!full).then_some(self.sequence),
++            removed_connection_ids: removed,
++            snapshot: snapshot.with_connections(if full { &encoded } else { &updates }),
++        };
++        let result = serialize_record(&record)?;
++        self.previous = Some(
++            projected
++                .into_iter()
++                .zip(encoded)
++                .map(|(projected, json)| CachedConnection { projected, json })
++                .collect(),
++        );
++        self.sequence = sequence;
++        if full {
++            self.last_full = Some((sequence, now));
++        }
++        Ok(result)
++    }
++
++    fn full_without_baseline(
++        &mut self,
++        snapshot: SnapshotEnvelope,
++        sequence: u64,
++        now: Instant,
++    ) -> anyhow::Result<Vec<u8>> {
++        let result = serialize_record(&IncrementalRecord {
++            sequence,
++            base_sequence: None,
++            removed_connection_ids: Vec::new(),
++            snapshot,
++        })?;
++        self.previous = None;
++        self.sequence = sequence;
++        self.last_full = Some((sequence, now));
++        Ok(result)
++    }
++}
++
++#[cfg(test)]
++mod tests;
+diff --git a/src/headless/schema/incremental/tests.rs b/src/headless/schema/incremental/tests.rs
+new file mode 100644
+index 0000000..351ae0a
+--- /dev/null
++++ b/src/headless/schema/incremental/tests.rs
+@@ -0,0 +1,225 @@
++use std::collections::BTreeMap;
++
++use super::*;
++use crate::headless::tests::app_with_connections;
++use serde_json::Value;
++
++// Deliberately reconstruct from wire JSON, without using encoder internals.
++#[derive(Default)]
++struct Consumer {
++    sequence: Option<u64>,
++    connections: BTreeMap<String, Value>,
++}
++
++impl Consumer {
++    fn apply(&mut self, record: &Value) -> Option<Value> {
++        assert_eq!(record["schema_version"], INCREMENTAL_SCHEMA_VERSION);
++        let sequence = record["sequence"].as_u64().unwrap();
++        match record["type"].as_str().unwrap() {
++            "snapshot" => {
++                assert!(record["base_sequence"].is_null());
++                assert!(
++                    record["removed_connection_ids"]
++                        .as_array()
++                        .unwrap()
++                        .is_empty()
++                );
++                self.connections.clear();
++            }
++            "delta" => {
++                if self.sequence != record["base_sequence"].as_u64()
++                    || self.sequence.and_then(|last| last.checked_add(1)) != Some(sequence)
++                {
++                    self.sequence = None;
++                    return None;
++                }
++                for id in record["removed_connection_ids"].as_array().unwrap() {
++                    assert!(self.connections.remove(id.as_str().unwrap()).is_some());
++                }
++            }
++            kind => panic!("unexpected record type: {kind}"),
++        }
++        for connection in record["connections"].as_array().unwrap() {
++            self.connections.insert(
++                connection["id"].as_str().unwrap().into(),
++                connection.clone(),
++            );
++        }
++        assert_eq!(record["connection_count"], self.connections.len());
++        self.sequence = Some(sequence);
++        let mut snapshot = record.clone();
++        let object = snapshot.as_object_mut().unwrap();
++        for key in ["sequence", "base_sequence", "removed_connection_ids"] {
++            object.remove(key);
++        }
++        snapshot["schema_version"] = SCHEMA_VERSION.into();
++        snapshot["type"] = "snapshot".into();
++        snapshot["connections"] = self.connections.values().cloned().collect();
++        Some(snapshot)
++    }
++}
++
++fn snapshot(app: &App) -> SnapshotEnvelope {
++    SnapshotEnvelope::new(app, None, RuntimePhase::Running, None, None).1
++}
++
++fn assert_reconstructs(
++    encoder: &mut IncrementalEncoder,
++    consumer: &mut Consumer,
++    snapshot: SnapshotEnvelope,
++    now: Instant,
++) -> Value {
++    let expected = serde_json::to_value(&snapshot).unwrap();
++    let bytes = encoder
++        .serialize_at(snapshot, now, MAX_CACHED_CONNECTIONS, MAX_CACHED_JSON_BYTES)
++        .unwrap();
++    let record = serde_json::from_slice(&bytes).unwrap();
++    assert_eq!(consumer.apply(&record).unwrap(), expected);
++    record
++}
++
++#[test]
++fn reconstructs_updates_archival_late_metadata_eviction_and_tuple_reuse() {
++    let app = app_with_connections();
++    let now = Instant::now();
++    let mut encoder = IncrementalEncoder::default();
++    let mut consumer = Consumer::default();
++    assert_reconstructs(&mut encoder, &mut consumer, snapshot(&app), now);
++    let original = Arc::clone(&encoder.previous.as_ref().unwrap()[0].json);
++    let unchanged = assert_reconstructs(&mut encoder, &mut consumer, snapshot(&app), now);
++    assert_eq!(unchanged["type"], "delta");
++    assert_eq!(unchanged["connections"], serde_json::json!([]));
++    assert!(Arc::ptr_eq(
++        &original,
++        &encoder.previous.as_ref().unwrap()[0].json
++    ));
++
++    for iteration in 0..150 {
++        let mut record = snapshot(&app);
++        record.runtime.snapshot_generation += iteration * 3;
++        record.stats.packets_captured += iteration;
++        record.stats.bytes_captured += iteration * 100;
++        if iteration > 5 {
++            record.connections[0].historic = true;
++            record.connections[0].closed_at = Some("2026-01-01T00:00:00Z".into());
++            record.connections[0].traffic.bytes_received = 500;
++        }
++        if iteration > 10 {
++            record.connections[0].hostname = Some("late.example".into());
++            record.connections[0].process.as_mut().unwrap().name = Some("late process".into());
++            record.connections[0].geoip = Some(GeoIpSnapshot {
++                country_code: Some("CH".into()),
++                country_name: None,
++                asn: Some(64512),
++                as_org: None,
++                city: None,
++                postal_code: None,
++            });
++        }
++        record.connections[1].traffic.bytes_sent += iteration;
++        record.connections[1].traffic.outgoing_bytes_per_second =
++            finite(if iteration % 2 == 0 { 0.0 } else { -0.0 });
++        if iteration > 20 {
++            record.connections[1].id.push_str("-new-lifetime");
++        }
++        if iteration > 25 {
++            record.connections.remove(0);
++            record.filter = Some("process:resolver".into());
++        }
++        if iteration > 40 {
++            record.connections.clear();
++        }
++        record.connection_count = record.connections.len();
++        assert_reconstructs(&mut encoder, &mut consumer, record, now);
++    }
++}
++
++#[test]
++fn dropped_duplicate_or_out_of_order_records_require_a_full_resynchronization() {
++    let app = app_with_connections();
++    let now = Instant::now();
++    let mut encoder = IncrementalEncoder::default();
++    let mut consumer = Consumer::default();
++    let initial = assert_reconstructs(&mut encoder, &mut consumer, snapshot(&app), now);
++    let encode = |encoder: &mut IncrementalEncoder, now| {
++        serde_json::from_slice::<Value>(
++            &encoder
++                .serialize_at(snapshot(&app), now, 10, 100_000)
++                .unwrap(),
++        )
++        .unwrap()
++    };
++    let missed = encode(&mut encoder, now);
++    let after_gap = encode(&mut encoder, now);
++    assert!(consumer.apply(&after_gap).is_none());
++    assert!(consumer.apply(&missed).is_none());
++    let full = encode(&mut encoder, now + FULL_SNAPSHOT_INTERVAL);
++    assert_eq!(full["type"], "snapshot");
++    assert!(consumer.apply(&full).is_some());
++
++    let delta = encode(&mut encoder, now + FULL_SNAPSHOT_INTERVAL);
++    assert!(consumer.apply(&delta).is_some());
++    assert!(consumer.apply(&delta).is_none());
++    // A new process/pipe starts a new stream, with its own initial snapshot.
++    consumer = Consumer::default();
++    assert!(consumer.apply(&delta).is_none());
++    assert!(consumer.apply(&initial).is_some());
++}
++
++#[test]
++fn full_snapshots_are_periodic_and_terminal_is_self_contained() {
++    let app = app_with_connections();
++    let now = Instant::now();
++    let mut encoder = IncrementalEncoder::default();
++    let mut consumer = Consumer::default();
++    for sequence in 1..=FULL_SNAPSHOT_RECORDS + 1 {
++        let record = assert_reconstructs(&mut encoder, &mut consumer, snapshot(&app), now);
++        assert_eq!(record["sequence"], sequence);
++        assert_eq!(
++            record["type"] == "snapshot",
++            sequence == 1 || sequence == FULL_SNAPSHOT_RECORDS + 1
++        );
++    }
++    let mut terminal = SnapshotEnvelope::new(
++        &app,
++        None,
++        RuntimePhase::StoppedWithErrors,
++        Some(TerminationReason::RuntimeFailed),
++        Some(StopReport::default()),
++    )
++    .1;
++    terminal.connections[0].traffic.bytes_received += 77;
++    terminal.stats.bytes_captured += 77;
++    let expected = serde_json::to_value(&terminal).unwrap();
++    let record = assert_reconstructs(&mut encoder, &mut consumer, terminal, now);
++    assert_eq!(record["type"], "snapshot");
++    assert_eq!(Consumer::default().apply(&record).unwrap(), expected);
++}
++
++#[test]
++fn limits_fall_back_to_complete_snapshots_and_resume_deltas_when_state_fits() {
++    let app = app_with_connections();
++    let now = Instant::now();
++    for (max_connections, max_bytes) in [(0, usize::MAX), (1, usize::MAX), (10, 1), (10, 1_500)] {
++        let mut encoder = IncrementalEncoder::default();
++        let mut consumer = Consumer::default();
++        assert_reconstructs(&mut encoder, &mut consumer, snapshot(&app), now);
++        for _ in 0..2 {
++            let snapshot = snapshot(&app);
++            let expected = serde_json::to_value(&snapshot).unwrap();
++            let record: Value = serde_json::from_slice(
++                &encoder
++                    .serialize_at(snapshot, now, max_connections, max_bytes)
++                    .unwrap(),
++            )
++            .unwrap();
++            assert_eq!(record["type"], "snapshot");
++            assert_eq!(consumer.apply(&record).unwrap(), expected);
++            assert!(encoder.previous.is_none());
++        }
++        let full = assert_reconstructs(&mut encoder, &mut consumer, snapshot(&app), now);
++        assert_eq!(full["type"], "snapshot");
++        let delta = assert_reconstructs(&mut encoder, &mut consumer, snapshot(&app), now);
++        assert_eq!(delta["type"], "delta");
++    }
++}
+diff --git a/src/headless/tests.rs b/src/headless/tests.rs
+index aa1708a..847ba16 100644
+--- a/src/headless/tests.rs
++++ b/src/headless/tests.rs
+@@ -136,38 +136,40 @@ fn json_writes_one_final_versioned_snapshot() {
+ 
+ #[test]
+ fn jsonl_emits_an_initial_snapshot_and_applies_filter() {
+-    let mut app = app_with_connections();
+-    let output = SharedWriter::default();
+-    let stop_report = run(
+-        &mut app,
+-        output.clone(),
+-        &HeadlessOptions {
+-            format: HeadlessFormat::JsonLines,
+-            duration: Some(Duration::ZERO),
+-            filter_query: Some("proto:tcp".to_string()),
+-        },
+-        &AtomicBool::new(false),
+-    )
+-    .unwrap();
+-
+-    assert_eq!(stop_report.timed_out_workers, 0);
+-    let output = output.bytes();
+-    let records: Vec<Value> = output
+-        .split(|byte| *byte == b'\n')
+-        .filter(|line| !line.is_empty())
+-        .map(|line| serde_json::from_slice(line).unwrap())
+-        .collect();
+-    assert!((1..=2).contains(&records.len()));
+-
+-    let value = records.last().unwrap();
+-    assert_eq!(value["filter"], "proto:tcp");
+-    assert_eq!(value["connection_count"], 1);
+-    assert_eq!(value["connections"][0]["protocol"], "TCP");
+-    assert_eq!(value["connections"][0]["process"]["name"], "curl");
++    for format in [HeadlessFormat::JsonLines, HeadlessFormat::JsonLinesDelta] {
++        let mut app = app_with_connections();
++        let output = SharedWriter::default();
++        let stop_report = run(
++            &mut app,
++            output.clone(),
++            &HeadlessOptions {
++                format,
++                duration: Some(Duration::ZERO),
++                filter_query: Some("proto:tcp".to_string()),
++            },
++            &AtomicBool::new(false),
++        )
++        .unwrap();
+ 
+-    assert_eq!(value["runtime"]["status"], "stopped");
+-    assert_eq!(value["runtime"]["termination_reason"], "duration_elapsed");
+-    assert!(value["runtime"]["shutdown"].is_object());
++        assert_eq!(stop_report.timed_out_workers, 0);
++        let output = output.bytes();
++        let records: Vec<Value> = output
++            .split(|byte| *byte == b'\n')
++            .filter(|line| !line.is_empty())
++            .map(|line| serde_json::from_slice(line).unwrap())
++            .collect();
++        assert!((1..=2).contains(&records.len()));
++
++        let value = records.last().unwrap();
++        assert_eq!(value["filter"], "proto:tcp");
++        assert_eq!(value["connection_count"], 1);
++        assert_eq!(value["connections"][0]["protocol"], "TCP");
++        assert_eq!(value["connections"][0]["process"]["name"], "curl");
++
++        assert_eq!(value["runtime"]["status"], "stopped");
++        assert_eq!(value["runtime"]["termination_reason"], "duration_elapsed");
++        assert!(value["runtime"]["shutdown"].is_object());
++    }
+ }
+ 
+ enum FailingWriter {
+@@ -196,16 +198,21 @@ impl Write for FailingWriter {
+ 
+ #[test]
+ fn broken_pipe_is_a_clean_exit() {
+-    let mut app = app_with_connections();
+-    let stop_report = run(
+-        &mut app,
+-        FailingWriter::Write(io::ErrorKind::BrokenPipe),
+-        &HeadlessOptions::default(),
+-        &AtomicBool::new(false),
+-    )
+-    .unwrap();
++    for format in [HeadlessFormat::JsonLines, HeadlessFormat::JsonLinesDelta] {
++        let mut app = app_with_connections();
++        let stop_report = run(
++            &mut app,
++            FailingWriter::Write(io::ErrorKind::BrokenPipe),
++            &HeadlessOptions {
++                format,
++                ..HeadlessOptions::default()
++            },
++            &AtomicBool::new(false),
++        )
++        .unwrap();
+ 
+-    assert_eq!(stop_report.timed_out_workers, 0);
++        assert_eq!(stop_report.timed_out_workers, 0);
++    }
+ }
+ 
+ #[test]
+@@ -381,27 +388,86 @@ fn superseded_snapshots_are_dropped_without_serialization_and_terminal_is_writte
+ }
+ 
+ #[test]
+-fn stalled_writer_cannot_block_duration_shutdown() {
+-    let (writer, _output, entered, release, finished) = stalled_writer();
+-    let mut app = app_with_connections();
+-    let started = Instant::now();
+-    let error = run_with_writer_deadline(
+-        &mut app,
+-        writer,
+-        &HeadlessOptions {
+-            duration: Some(Duration::from_millis(20)),
+-            ..HeadlessOptions::default()
+-        },
+-        &AtomicBool::new(false),
+-        Duration::from_millis(30),
+-    )
+-    .unwrap_err();
+-
+-    assert!(started.elapsed() < Duration::from_secs(1));
+-    assert!(error.to_string().contains("did not finish within 30ms"));
++fn incremental_baseline_tracks_written_records_after_queue_replacement() {
++    let app = app_with_connections();
++    let snapshot = || SnapshotEnvelope::new(&app, None, RuntimePhase::Running, None, None).1;
++    let expected = serde_json::to_value(snapshot()).unwrap();
++    let (writer, output, entered, release, finished) = stalled_writer();
++    let mut encoder = IncrementalEncoder::default();
++    let (encoded_tx, encoded_rx) = mpsc::channel();
++    let mut sink = AsyncOutput::spawn_with_serializer(writer, move |record| {
++        let bytes = encoder.serialize(record)?;
++        encoded_tx.send(()).unwrap();
++        Ok(bytes)
++    })
++    .unwrap();
++    sink.offer_latest(snapshot());
+     entered.recv_timeout(Duration::from_secs(1)).unwrap();
++    encoded_rx.recv_timeout(Duration::from_secs(1)).unwrap();
++    for _ in 0..20 {
++        let filtered =
++            SnapshotEnvelope::new(&app, Some("proto:tcp"), RuntimePhase::Running, None, None).1;
++        sink.offer_latest(filtered);
++    }
++    // Every filtered snapshot is superseded while the first write is blocked.
++    // Diffing on the producer would incorrectly reinsert the UDP connection.
++    sink.offer_latest(snapshot());
+     release.send(()).unwrap();
++    encoded_rx.recv_timeout(Duration::from_secs(1)).unwrap();
++    let terminal = SnapshotEnvelope::new(
++        &app,
++        None,
++        RuntimePhase::Stopped,
++        Some(TerminationReason::DurationElapsed),
++        Some(StopReport::default()),
++    )
++    .1;
++    sink.finish(terminal, Duration::from_secs(1)).unwrap();
+     finished.recv_timeout(Duration::from_secs(1)).unwrap();
++    let records: Vec<Value> = output
++        .bytes()
++        .split(|b| *b == b'\n')
++        .filter(|line| !line.is_empty())
++        .map(|line| serde_json::from_slice(line).unwrap())
++        .collect();
++    assert_eq!(records.len(), 3);
++    assert_eq!(records[0]["connections"], expected["connections"]);
++    assert_eq!(records[1]["type"], "delta");
++    assert_eq!(records[1]["sequence"], 2);
++    assert_eq!(records[1]["base_sequence"], 1);
++    assert_eq!(records[1]["connections"], serde_json::json!([]));
++    assert_eq!(records[1]["removed_connection_ids"], serde_json::json!([]));
++    assert_eq!(records[2]["type"], "snapshot");
++    assert_eq!(records[2]["sequence"], 3);
++    assert_eq!(records[2]["connections"], expected["connections"]);
++    assert_eq!(records[2]["runtime"]["status"], "stopped");
++}
++
++#[test]
++fn stalled_writer_cannot_block_duration_shutdown() {
++    for format in [HeadlessFormat::JsonLines, HeadlessFormat::JsonLinesDelta] {
++        let (writer, _output, entered, release, finished) = stalled_writer();
++        let mut app = app_with_connections();
++        let started = Instant::now();
++        let error = run_with_writer_deadline(
++            &mut app,
++            writer,
++            &HeadlessOptions {
++                format,
++                duration: Some(Duration::from_millis(20)),
++                ..HeadlessOptions::default()
++            },
++            &AtomicBool::new(false),
++            Duration::from_millis(30),
++        )
++        .unwrap_err();
++
++        assert!(started.elapsed() < Duration::from_secs(1));
++        assert!(error.to_string().contains("did not finish within 30ms"));
++        entered.recv_timeout(Duration::from_secs(1)).unwrap();
++        release.send(()).unwrap();
++        finished.recv_timeout(Duration::from_secs(1)).unwrap();
++    }
+ }
+ 
+ #[test]
+@@ -633,7 +699,11 @@ fn capture_failure_stops_an_indefinite_run() {
+ 
+ #[test]
+ fn capture_failure_wins_a_simultaneous_normal_exit() {
+-    for format in [HeadlessFormat::JsonLines, HeadlessFormat::Json] {
++    for format in [
++        HeadlessFormat::JsonLines,
++        HeadlessFormat::JsonLinesDelta,
++        HeadlessFormat::Json,
++    ] {
+         let mut app = app_with_connections();
+         app.set_capture_error_for_test(Some("injected device failure"));
+         let output = SharedWriter::default();
+@@ -714,6 +784,8 @@ fn format_tokens_are_stable() {
+     assert_eq!(HeadlessFormat::JsonLines.as_str(), "jsonl");
+     assert_eq!(HeadlessFormat::Json.as_str(), "json");
+     assert_eq!("jsonl".parse(), Ok(HeadlessFormat::JsonLines));
++    assert_eq!(HeadlessFormat::JsonLinesDelta.as_str(), "jsonl-delta");
++    assert_eq!("jsonl-delta".parse(), Ok(HeadlessFormat::JsonLinesDelta));
+     assert_eq!("json".parse(), Ok(HeadlessFormat::Json));
+     assert!("yaml".parse::<HeadlessFormat>().is_err());
+ }

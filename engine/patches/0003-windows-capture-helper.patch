@@ -85,7 +85,7 @@ index 5936c7b..cf10514 100644
              }
  
 diff --git a/src/app/state.rs b/src/app/state.rs
-index e2446e6..863712d 100644
+index 9748986..af96af7 100644
 --- a/src/app/state.rs
 +++ b/src/app/state.rs
 @@ -240,6 +240,11 @@ fn build_geoip_resolver(config: &Config) -> Option<Arc<GeoIpResolver>> {
@@ -194,10 +194,10 @@ index f298250..d69b19c 100644
  #[cfg(target_os = "windows")]
 diff --git a/src/windows_helper.rs b/src/windows_helper.rs
 new file mode 100644
-index 0000000..7674d63
+index 0000000..060e5ac
 --- /dev/null
 +++ b/src/windows_helper.rs
-@@ -0,0 +1,353 @@
+@@ -0,0 +1,354 @@
 +//! One UAC-approved capture session. No service, command runner, or elevated
 +//! pathname access. The desktop owns all pipes and opens every optional file.
 +use anyhow::{Context, Result, ensure};
@@ -447,7 +447,7 @@ index 0000000..7674d63
 +            "rustnet",
 +            "--headless",
 +            "--output",
-+            "jsonl",
++            "jsonl-delta",
 +            "--headless-details",
 +            "full",
 +            "--capture-accounting",
@@ -545,6 +545,7 @@ index 0000000..7674d63
 +            .try_get_matches_from(session.arguments())
 +            .unwrap();
 +        assert!(matches.get_flag("headless"));
++        assert_eq!(matches.get_one::<String>("output").unwrap(), "jsonl-delta");
 +        assert!(matches.get_flag("sandbox-strict"));
 +        assert!(matches.get_flag("stop-on-stdin-close"));
 +        assert!(matches.get_flag("no-resolve-dns"));
