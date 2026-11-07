@@ -85,7 +85,7 @@ index 5936c7b..cf10514 100644
              }
  
 diff --git a/src/app/state.rs b/src/app/state.rs
-index e2446e6..863712d 100644
+index 9748986..af96af7 100644
 --- a/src/app/state.rs
 +++ b/src/app/state.rs
 @@ -240,6 +240,11 @@ fn build_geoip_resolver(config: &Config) -> Option<Arc<GeoIpResolver>> {
