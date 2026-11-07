@@ -406,5 +406,5 @@ GitHub Dependabot 每天检查仓库根目录的 pnpm 依赖、`src-tauri` 中�
 等待 3 天。Dependabot 自动将安全更新排除在等待期之外。合并前应审查 PR 和 CI
 结果；未配置自动合并，无需安装外部应用。
 
-`engine.lock.json` 和临时引擎补丁仍需一起手动维护，Dependabot 不会更新已应用
+`engine.lock.json` 和桌面专用辅助程序补丁仍需一起手动维护，Dependabot 不会更新已应用
 补丁的引擎提交版本。

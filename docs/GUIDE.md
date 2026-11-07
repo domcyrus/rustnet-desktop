@@ -526,5 +526,5 @@ updates have a 3-day cooldown. Dependabot automatically exempts security updates
 from cooldowns. Review the PR and CI results before merging;
 no automatic merging or external app installation is configured.
 
-`engine.lock.json` and the temporary engine patches remain manually maintained
+`engine.lock.json` and the desktop-only helper patch remain manually maintained
 together. Dependabot does not update the patched engine revision.

@@ -8,7 +8,7 @@
 - 修复通过符号链接定位同目录可执行文件的简单 shell 启动器的 Linux 应用图标匹配，包括 ChatGPT。 (#39)
 
 ### 变更
-- 将引擎更新到 [RustNet #721](https://github.com/domcyrus/rustnet/pull/721) 的 `64fe320`，移除已包含在上游的补丁，保留桌面专用的 Windows 辅助程序和原生图标集成。
+- 将引擎更新到 [RustNet #721](https://github.com/domcyrus/rustnet/pull/721) 的 `64fe320`，移除已包含在上游的补丁，保留桌面专用的 Windows 辅助程序和原生图标集成。 (#47)
 - 将引擎和待合入的 #719 变基到 RustNet main 的 `e33cffc`。使用包含完整元数据的引擎增量输出，验证增量重建，保持冻结/恢复连续性，并支持最大 128 MiB 快照。 (#46)
 - PR 和 main 的 CI 仅运行 Linux x64；macOS 和 Windows 检查在稳定版发布时或手动运行。 (#42)
 - 将捆绑引擎更新至合入 [#699](https://github.com/domcyrus/rustnet/pull/699) 后的 RustNet main 提交 `327a63f`，更新桌面集成补丁，并复用上游历史连接 JSON 缓存。 (#41)
