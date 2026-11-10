@@ -62,7 +62,7 @@ Capture coverage makes unattributed traffic visible too. See the
 ## Try it
 
 **RustNet Desktop is an alpha preview, currently built from source.** Build on the
-platform you intend to use. You'll need Git, Rust, Node.js 22.22.2+ or 24.15.0+ LTS,
+platform you intend to use. You'll need Git, Rust 1.89+, Node.js 22.22.2+ or 24.15.0+ LTS,
 [pnpm 12.15.0](https://pnpm.io/installation), and the
 [platform prerequisites](docs/GUIDE.md#develop).
 

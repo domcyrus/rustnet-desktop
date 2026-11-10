@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Update bundled SQLite through rusqlite 0.41.1 to fix RUSTSEC-2026-0459; require Rust 1.89 or newer. (#48)
 - Make incremental queue tests compare the exact emitted projections, including changing lifecycle countdowns. (#46)
 - Resolve Linux icons for updated executables marked `(deleted)` and shell launchers with a literal final executable path, including Signal. (#40)
 - Resolve Linux application icons for simple shell launchers that locate a sibling executable through a symlink, including ChatGPT. (#39)
