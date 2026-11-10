@@ -60,7 +60,7 @@ Alpha 预览版提供：
 ## 开始体验
 
 **RustNet Desktop 目前处于 Alpha 预览阶段，需要从源码构建。** 请在目标平台上构建。
-需要 Git、Rust、Node.js 22.22.2+ 或 24.15.0+ LTS、
+需要 Git、Rust 1.89 或更新版本、Node.js 22.22.2+ 或 24.15.0+ LTS、
 [pnpm 12.15.0](https://pnpm.io/installation) 和[平台依赖](docs/GUIDE.zh-CN.md#开发)。
 
 ```sh
