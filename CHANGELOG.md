@@ -3,6 +3,7 @@
 ## [Unreleased]
 
 ### Fixed
+- Load Ubuntu's installed Bubblewrap AppArmor profile in CI, with support for the older extra-profiles location. (#51)
 - Export the prepared capture engine from container builds instead of assuming it is beside the desktop executable. (#51)
 - Update bundled SQLite through rusqlite 0.41.1 to fix RUSTSEC-2026-0459; require Rust 1.89 or newer. (#48)
 - Make incremental queue tests compare the exact emitted projections, including changing lifecycle countdowns. (#46)
