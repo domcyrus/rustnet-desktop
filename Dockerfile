@@ -32,9 +32,12 @@ RUN setpriv --no-new-privs node scripts/isolated-phase.mjs fetch release
 
 # Reuse the isolated workflow's offline install, tests, linting and embedded build.
 ENV CARGO_NET_OFFLINE=true
-RUN --network=none setpriv --no-new-privs node scripts/isolated-phase.mjs build release \
+RUN --network=none setpriv --no-new-privs node scripts/isolated-phase.mjs build release
+
+# Export the prepared sidecar directly; do not rely on Tauri staging it beside the desktop.
+RUN --network=none target="$(rustc -vV | sed -n 's/^host: //p')" \
     && install -m 0755 /build/target/release/rustnet-desktop /out/rustnet-desktop \
-    && install -m 0755 /build/target/release/rustnet-capture-engine /out/rustnet-capture-engine
+    && install -m 0755 "src-tauri/binaries/rustnet-capture-engine-${target}" /out/rustnet-capture-engine
 
 # Export image only. Copy both files out; runtime libraries belong to the host.
 FROM scratch AS artifacts
