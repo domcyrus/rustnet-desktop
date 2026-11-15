@@ -34,7 +34,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bubblewrap apparmor-profiles
           # Permit namespace setup through the distro's scoped bwrap profile.
-          sudo apparmor_parser -r /usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+          profile=/etc/apparmor.d/bwrap-userns-restrict
+          if [ ! -f "$profile" ]; then
+            profile=/usr/share/apparmor/extra-profiles/bwrap-userns-restrict
+          fi
+          sudo apparmor_parser -r "$profile"
       # These tests need no npm dependencies and exercise the actual OS boundary.
       - run: node --test scripts/isolation.check.mjs
       - name: Check container build launcher
