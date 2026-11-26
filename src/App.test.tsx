@@ -170,9 +170,12 @@ describe("desktop workflow", () => {
     fireEvent.click(trigger);
     const dialog = screen.getByRole("dialog", { name: "Appearance settings" });
     await selectOption("Appearance", "Dark");
+    await selectOption("Accent palette", "Cyber (Cyan & Emerald)");
     await selectOption("Scrollbars", "System default");
     await selectOption("Connection rows", "Compact");
     expect(document.documentElement.dataset.theme).toBe("dark");
+    expect(document.documentElement.dataset.palette).toBe("cyber");
+    expect(localStorage.getItem("rustnet.palette")).toBe("cyber");
     expect(localStorage.getItem("rustnet.scrollbars")).toBe("system");
     expect(localStorage.getItem("rustnet.density")).toBe("compact");
     fireEvent.keyDown(window, { key: "h" });

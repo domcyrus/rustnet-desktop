@@ -273,6 +273,36 @@ export function HistoryTimeSeries({
               <rect width="6" height="6" className="health-partial-bg" />
               <rect width="2" height="6" className="health-partial-stripe" />
             </pattern>
+            <linearGradient
+              id={`${pattern}-grad-received`}
+              x1="0"
+              y1="0"
+              x2="0"
+              y2="1"
+            >
+              <stop offset="0%" stopColor="var(--tx)" stopOpacity="0.34" />
+              <stop offset="100%" stopColor="var(--tx)" stopOpacity="0.02" />
+            </linearGradient>
+            <linearGradient
+              id={`${pattern}-grad-sent`}
+              x1="0"
+              y1="0"
+              x2="0"
+              y2="1"
+            >
+              <stop offset="0%" stopColor="var(--rx)" stopOpacity="0.32" />
+              <stop offset="100%" stopColor="var(--rx)" stopOpacity="0.02" />
+            </linearGradient>
+            <linearGradient
+              id={`${pattern}-grad-connections`}
+              x1="0"
+              y1="0"
+              x2="0"
+              y2="1"
+            >
+              <stop offset="0%" stopColor="var(--accent)" stopOpacity="0.32" />
+              <stop offset="100%" stopColor="var(--accent)" stopOpacity="0.02" />
+            </linearGradient>
           </defs>
           {timeTicks.map((t, i) => (
             <g key={i}>
@@ -355,7 +385,11 @@ export function HistoryTimeSeries({
                 >
                   {paths(c.value).map((path, i) => (
                     <g key={i}>
-                      <path d={path.area} className="plot-area" />
+                      <path
+                        d={path.area}
+                        className="plot-area"
+                        fill={`url(#${pattern}-grad-${c.key})`}
+                      />
                       <path d={path.line} className="plot-line" />
                     </g>
                   ))}
@@ -432,13 +466,26 @@ export function HistoryTimeSeries({
                 />
               ))}
           {point && (
-            <line
-              className="history-crosshair"
-              x1={center(point)}
-              x2={center(point)}
-              y1={top}
-              y2={bottom}
-            />
+            <>
+              <line
+                className="history-crosshair"
+                x1={center(point)}
+                x2={center(point)}
+                y1={top}
+                y2={bottom}
+              />
+              {kind !== "quality" &&
+                valid(point) &&
+                visible.map((c) => (
+                  <circle
+                    key={c.key}
+                    className={`history-hover-dot plot-series ${c.key}`}
+                    cx={center(point)}
+                    cy={y(c.value(point))}
+                    r={3.8}
+                  />
+                ))}
+            </>
           )}
           {selectionStart && selectionEnd && (
             <rect
