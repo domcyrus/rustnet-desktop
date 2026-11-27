@@ -156,9 +156,27 @@ export function ConnectionTable({
                     {c.hostname || endpoint(c.remote)}
                   </span>
                   <small className="connection-address">
-                    {c.hostname && `${endpoint(c.remote)} · `}
-                    {c.application || c.protocol} ·{" "}
-                    {c.historic ? `Closed · Last state: ${c.state}` : c.state}
+                    {c.hostname && (
+                      <>
+                        <span className="endpoint-chip">
+                          {endpoint(c.remote)}
+                        </span>
+                        <span className="meta-sep" aria-hidden="true">
+                          {" · "}
+                        </span>
+                      </>
+                    )}
+                    <span className="proto-chip">
+                      {c.application || c.protocol}
+                    </span>
+                    <span className="meta-sep" aria-hidden="true">
+                      {" · "}
+                    </span>
+                    <span
+                      className={`state-chip ${c.historic ? "is-closed" : c.state === "ESTABLISHED" ? "is-established" : ""}`}
+                    >
+                      {c.historic ? `Closed · Last state: ${c.state}` : c.state}
+                    </span>
                   </small>
                   {lifecycle && (
                     <small className="lifecycle-countdown">
@@ -166,12 +184,28 @@ export function ConnectionTable({
                     </small>
                   )}
                 </td>
-                <td className="numeric connection-download">
+                <td
+                  className="numeric connection-download"
+                  data-active-rate={
+                    !c.historic &&
+                    (c.traffic.incoming_bytes_per_second ?? 0) > 0
+                      ? "true"
+                      : undefined
+                  }
+                >
                   {c.historic
                     ? "Closed"
                     : bytes(c.traffic.incoming_bytes_per_second, true)}
                 </td>
-                <td className="numeric connection-upload">
+                <td
+                  className="numeric connection-upload"
+                  data-active-rate={
+                    !c.historic &&
+                    (c.traffic.outgoing_bytes_per_second ?? 0) > 0
+                      ? "true"
+                      : undefined
+                  }
+                >
                   {c.historic
                     ? "Retained"
                     : bytes(c.traffic.outgoing_bytes_per_second, true)}

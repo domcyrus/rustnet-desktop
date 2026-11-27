@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   Fragment,
+  type CSSProperties,
 } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import {
@@ -53,6 +54,7 @@ import {
 } from "./model";
 
 type Theme = "system" | "light" | "dark";
+type Palette = "prism" | "cyber" | "aurora" | "solar";
 function preference(key: string, fallback: string) {
   try {
     return localStorage.getItem(`rustnet.${key}`) ?? fallback;
@@ -85,6 +87,12 @@ export default function App() {
   const [theme, setTheme] = useState<Theme>(() => {
     const value = preference("theme", "system");
     return value === "light" || value === "dark" ? value : "system";
+  });
+  const [palette, setPalette] = useState<Palette>(() => {
+    const value = preference("palette", "prism");
+    return value === "cyber" || value === "aurora" || value === "solar"
+      ? value
+      : "prism";
   });
   const [settings, setSettings] = useState(false);
   const [help, setHelp] = useState(false);
@@ -162,6 +170,10 @@ export default function App() {
   const connection = all.find((c) => c.id === selectedConnection);
   const rx = apps.reduce((total, app) => total + app.rx, 0),
     tx = apps.reduce((total, app) => total + app.tx, 0);
+  const maxAppRx = useMemo(
+    () => Math.max(0, ...apps.map((a) => a.rx)),
+    [apps],
+  );
   const scopedConnections = useMemo(
     () => connectionsForApplication(all, applicationFilter?.key ?? null),
     [all, applicationFilter],
@@ -227,6 +239,10 @@ export default function App() {
     document.documentElement.dataset.theme = theme;
     savePreference("theme", theme);
   }, [theme]);
+  useEffect(() => {
+    document.documentElement.dataset.palette = palette;
+    savePreference("palette", palette);
+  }, [palette]);
   useEffect(() => {
     savePreference("screen", screen);
   }, [screen]);
@@ -560,6 +576,8 @@ export default function App() {
   return (
     <div
       className={`desktop ${screen === "connections" ? "connections-screen" : ""}`}
+      data-capturing={view.status === "running" && !stale ? "live" : view.status}
+      data-paused={paused ? "true" : undefined}
     >
       <aside className="sidebar">
         <div className="brand">
@@ -742,6 +760,20 @@ export default function App() {
                     { value: "system", label: "System" },
                     { value: "light", label: "Light" },
                     { value: "dark", label: "Dark" },
+                  ]}
+                />
+              </label>
+              <label>
+                Accent palette
+                <Select
+                  label="Accent palette"
+                  value={palette}
+                  onChange={(value) => setPalette(value as Palette)}
+                  options={[
+                    { value: "prism", label: "Prism (Violet & Teal)" },
+                    { value: "cyber", label: "Cyber (Cyan & Emerald)" },
+                    { value: "aurora", label: "Aurora (Orchid & Rose)" },
+                    { value: "solar", label: "Solar (Amber & Cobalt)" },
                   ]}
                 />
               </label>
@@ -1196,6 +1228,15 @@ export default function App() {
               <Fragment key={a.key}>
                 <button
                   className="app-row"
+                  style={
+                    {
+                      "--traffic-share":
+                        maxAppRx > 0 && a.rx > 0
+                          ? Math.max(0.03, Math.min(1, a.rx / maxAppRx))
+                          : 0,
+                    } as CSSProperties
+                  }
+                  data-active-traffic={a.rx > 0 ? "true" : undefined}
                   aria-pressed={a.key === app?.key}
                   aria-expanded={a.key === app?.key && applicationOpen}
                   title="Click for traffic overview; double-click to show this application's connections"
